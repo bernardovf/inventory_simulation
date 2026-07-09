@@ -7,22 +7,34 @@ Inputs:
     Q  - order quantity (used by the fixed-quantity policies)
     s  - reorder point
 
-Supported policies (pick with --policy):
+Supported policies (set POLICY below):
     sQ   - continuous review: every period, if inventory position <= s, order a fixed quantity Q
     sS   - continuous review: every period, if inventory position <= s, order up to S
     RS   - periodic review:   every R periods, order up to S unconditionally
     RsS  - periodic review:   every R periods, if inventory position <= s, order up to S
     RsQ  - periodic review:   every R periods, if inventory position <= s, order a fixed quantity Q
 
-Demand is generated per period from a Poisson distribution (mean --demand-mean).
-Orders arrive --lead-time periods after being placed. Unmet demand is backordered
+Demand is generated per period from a Poisson distribution (mean DEMAND_MEAN).
+Orders arrive LEAD_TIME periods after being placed. Unmet demand is backordered
 (on-hand inventory can go negative) and filled once stock arrives.
 """
-import argparse
 import csv
 import random
 import statistics
-from dataclasses import dataclass, field
+
+# ---- Hardcoded inputs ----
+POLICY = "RsS"
+S = 100  # order up-to level
+R = 7  # review period
+Q = 50  # order quantity
+s = 30  # reorder point
+PERIODS = 60
+DEMAND_MEAN = 10.0
+LEAD_TIME = 3
+INITIAL_INVENTORY = S
+SEED = 42
+CSV_PATH = "simulation_output.csv"
+PLOT_PATH = None  # e.g. "simulation_plot.png"
 
 
 def poisson_random(lam: float) -> int:
@@ -39,49 +51,8 @@ def poisson_random(lam: float) -> int:
             return k - 1
 
 
-@dataclass
-class PeriodRecord:
-    period: int
-    demand: int
-    starting_on_hand: int
-    ending_on_hand: int
-    on_order: int
-    inventory_position: int
-    stockout_units: int
-    order_placed: bool
-    order_qty: int
-
-
-@dataclass
-class SimulationResult:
-    records: list = field(default_factory=list)
-
-    def summary(self):
-        total_demand = sum(r.demand for r in self.records)
-        total_stockout = sum(r.stockout_units for r in self.records)
-        periods_with_stockout = sum(1 for r in self.records if r.stockout_units > 0)
-        avg_on_hand = statistics.mean(max(r.ending_on_hand, 0) for r in self.records)
-        avg_position = statistics.mean(r.inventory_position for r in self.records)
-        num_orders = sum(1 for r in self.records if r.order_placed)
-        total_ordered = sum(r.order_qty for r in self.records)
-        n = len(self.records)
-        fill_rate = 1 - (total_stockout / total_demand) if total_demand else 1.0
-        cycle_service_level = 1 - (periods_with_stockout / n) if n else 1.0
-        return {
-            "periods": n,
-            "total_demand": total_demand,
-            "total_stockout_units": total_stockout,
-            "fill_rate": fill_rate,
-            "cycle_service_level": cycle_service_level,
-            "avg_on_hand_inventory": avg_on_hand,
-            "avg_inventory_position": avg_position,
-            "num_orders_placed": num_orders,
-            "total_units_ordered": total_ordered,
-        }
-
-
-def is_review_period(t: int, R: int) -> bool:
-    return t % R == 0
+def is_review_period(t: int, review_interval: int) -> bool:
+    return t % review_interval == 0
 
 
 def decide_order(policy: str, position: int, s: int, S: int, Q: int, reviewed: bool):
@@ -99,18 +70,7 @@ def decide_order(policy: str, position: int, s: int, S: int, Q: int, reviewed: b
     raise ValueError(f"Unknown policy: {policy}")
 
 
-def simulate(
-    policy: str,
-    S: int,
-    R: int,
-    Q: int,
-    s: int,
-    periods: int,
-    demand_mean: float,
-    lead_time: int,
-    initial_inventory: int,
-    seed: int = None,
-) -> SimulationResult:
+def simulate(policy, S, R, Q, s, periods, demand_mean, lead_time, initial_inventory, seed=None):
     if seed is not None:
         random.seed(seed)
 
@@ -121,7 +81,7 @@ def simulate(
     on_order = 0
     arrivals = {}  # period -> quantity arriving that period
 
-    result = SimulationResult()
+    records = []
 
     for t in range(periods):
         arriving = arrivals.pop(t, 0)
@@ -144,24 +104,48 @@ def simulate(
         else:
             order_qty = 0
 
-        result.records.append(
-            PeriodRecord(
-                period=t,
-                demand=demand,
-                starting_on_hand=starting_on_hand,
-                ending_on_hand=on_hand,
-                on_order=on_order,
-                inventory_position=on_hand + on_order,
-                stockout_units=stockout_units,
-                order_placed=order_placed and order_qty > 0,
-                order_qty=order_qty,
-            )
+        records.append(
+            {
+                "period": t,
+                "demand": demand,
+                "starting_on_hand": starting_on_hand,
+                "ending_on_hand": on_hand,
+                "on_order": on_order,
+                "inventory_position": on_hand + on_order,
+                "stockout_units": stockout_units,
+                "order_placed": order_placed and order_qty > 0,
+                "order_qty": order_qty,
+            }
         )
 
-    return result
+    return records
 
 
-def write_csv(result: SimulationResult, path: str):
+def summarize(records):
+    total_demand = sum(r["demand"] for r in records)
+    total_stockout = sum(r["stockout_units"] for r in records)
+    periods_with_stockout = sum(1 for r in records if r["stockout_units"] > 0)
+    avg_on_hand = statistics.mean(max(r["ending_on_hand"], 0) for r in records)
+    avg_position = statistics.mean(r["inventory_position"] for r in records)
+    num_orders = sum(1 for r in records if r["order_placed"])
+    total_ordered = sum(r["order_qty"] for r in records)
+    n = len(records)
+    fill_rate = 1 - (total_stockout / total_demand) if total_demand else 1.0
+    cycle_service_level = 1 - (periods_with_stockout / n) if n else 1.0
+    return {
+        "periods": n,
+        "total_demand": total_demand,
+        "total_stockout_units": total_stockout,
+        "fill_rate": fill_rate,
+        "cycle_service_level": cycle_service_level,
+        "avg_on_hand_inventory": avg_on_hand,
+        "avg_inventory_position": avg_position,
+        "num_orders_placed": num_orders,
+        "total_units_ordered": total_ordered,
+    }
+
+
+def write_csv(records, path):
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(
@@ -177,32 +161,32 @@ def write_csv(result: SimulationResult, path: str):
                 "order_qty",
             ]
         )
-        for r in result.records:
+        for r in records:
             writer.writerow(
                 [
-                    r.period,
-                    r.demand,
-                    r.starting_on_hand,
-                    r.ending_on_hand,
-                    r.on_order,
-                    r.inventory_position,
-                    r.stockout_units,
-                    r.order_placed,
-                    r.order_qty,
+                    r["period"],
+                    r["demand"],
+                    r["starting_on_hand"],
+                    r["ending_on_hand"],
+                    r["on_order"],
+                    r["inventory_position"],
+                    r["stockout_units"],
+                    r["order_placed"],
+                    r["order_qty"],
                 ]
             )
 
 
-def maybe_plot(result: SimulationResult, path: str):
+def maybe_plot(records, path):
     try:
         import matplotlib.pyplot as plt
     except ImportError:
         print("matplotlib not installed; skipping plot (pip install matplotlib to enable).")
         return
 
-    periods = [r.period for r in result.records]
-    on_hand = [r.ending_on_hand for r in result.records]
-    position = [r.inventory_position for r in result.records]
+    periods = [r["period"] for r in records]
+    on_hand = [r["ending_on_hand"] for r in records]
+    position = [r["inventory_position"] for r in records]
 
     plt.figure(figsize=(10, 5))
     plt.plot(periods, on_hand, label="On-hand inventory")
@@ -218,40 +202,23 @@ def maybe_plot(result: SimulationResult, path: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Basic inventory simulation (S, R, Q, s).")
-    parser.add_argument("--policy", choices=["sQ", "sS", "RS", "RsS", "RsQ"], default="RsS")
-    parser.add_argument("--S", type=int, default=100, help="Order up-to level")
-    parser.add_argument("--R", type=int, default=7, help="Review period")
-    parser.add_argument("--Q", type=int, default=50, help="Order quantity")
-    parser.add_argument("--s", type=int, default=30, help="Reorder point")
-    parser.add_argument("--periods", type=int, default=100, help="Number of periods to simulate")
-    parser.add_argument("--demand-mean", type=float, default=10.0, help="Mean demand per period")
-    parser.add_argument("--lead-time", type=int, default=3, help="Lead time in periods")
-    parser.add_argument("--initial-inventory", type=int, default=None, help="Starting on-hand inventory (defaults to S)")
-    parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
-    parser.add_argument("--csv", type=str, default="simulation_output.csv", help="Path to write CSV output")
-    parser.add_argument("--plot", type=str, default=None, help="Path to save a plot (requires matplotlib)")
-    args = parser.parse_args()
-
-    initial_inventory = args.initial_inventory if args.initial_inventory is not None else args.S
-
-    result = simulate(
-        policy=args.policy,
-        S=args.S,
-        R=args.R,
-        Q=args.Q,
-        s=args.s,
-        periods=args.periods,
-        demand_mean=args.demand_mean,
-        lead_time=args.lead_time,
-        initial_inventory=initial_inventory,
-        seed=args.seed,
+    records = simulate(
+        policy=POLICY,
+        S=S,
+        R=R,
+        Q=Q,
+        s=s,
+        periods=PERIODS,
+        demand_mean=DEMAND_MEAN,
+        lead_time=LEAD_TIME,
+        initial_inventory=INITIAL_INVENTORY,
+        seed=SEED,
     )
 
-    write_csv(result, args.csv)
-    print(f"Wrote {len(result.records)} periods to {args.csv}")
+    write_csv(records, CSV_PATH)
+    print(f"Wrote {len(records)} periods to {CSV_PATH}")
 
-    summary = result.summary()
+    summary = summarize(records)
     print("\nSummary:")
     for k, v in summary.items():
         if isinstance(v, float):
@@ -259,8 +226,8 @@ def main():
         else:
             print(f"  {k}: {v}")
 
-    if args.plot:
-        maybe_plot(result, args.plot)
+    if PLOT_PATH:
+        maybe_plot(records, PLOT_PATH)
 
 
 if __name__ == "__main__":

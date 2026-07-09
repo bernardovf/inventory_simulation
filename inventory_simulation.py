@@ -2,10 +2,11 @@
 """Basic single-item inventory simulation.
 
 Inputs:
-    S  - order up-to level
-    R  - review period (periods between reviews; R=1 means continuous/every-period review)
-    Q  - order quantity (used by the fixed-quantity policies)
-    s  - reorder point
+    R              - review period (periods between reviews; R=1 means continuous/every-period review)
+    Q              - order quantity (used by the fixed-quantity policies)
+    SAFETY_STOCK   - safety stock, in units
+    S, s           - order up-to level and reorder point; computed below from demand,
+                     lead time, review period, and safety stock (see reorder_point/order_up_to_level)
 
 Supported policies (set POLICY below):
     sQ   - continuous review: every period, if inventory position <= s, order a fixed quantity Q
@@ -13,6 +14,17 @@ Supported policies (set POLICY below):
     RS   - periodic review:   every R periods, order up to S unconditionally
     RsS  - periodic review:   every R periods, if inventory position <= s, order up to S
     RsQ  - periodic review:   every R periods, if inventory position <= s, order a fixed quantity Q
+
+Reorder point / order-up-to level:
+    The reorder point must cover expected demand over the "protection period" - the
+    time between placing an order and being able to react to the next one - plus a
+    safety stock buffer:
+        s = demand_mean * protection_period + safety_stock
+    For continuous review (sQ, sS) the protection period is just the lead time L,
+    since inventory position is checked every period. For periodic review (RS, RsS,
+    RsQ) it's R + L, since a stockout risk window also includes waiting for the next
+    review. The order-up-to level S is set to cover the same protection period plus
+    one order batch: S = s + Q.
 
 Demand is generated per period from a Poisson distribution (mean DEMAND_MEAN).
 Orders arrive LEAD_TIME periods after being placed. Unmet demand is backordered
@@ -25,17 +37,29 @@ import matplotlib
 
 # ---- Hardcoded inputs ----
 POLICY = "RsS"
-S = 100  # order up-to level
 R = 7  # review period
 Q = 50  # order quantity
-s = 30  # reorder point
+SAFETY_STOCK = 20  # units
 PERIODS = 60
 DEMAND_MEAN = 10.0
 LEAD_TIME = 3
-INITIAL_INVENTORY = 100
 SEED = 42
 CSV_PATH = "simulation_output.csv"
 PLOT_PATH = "simulation_plot.png"  # e.g. "simulation_plot.png"
+
+
+def protection_period(policy, review_period, lead_time):
+    if policy in ("sQ", "sS"):
+        return lead_time
+    return review_period + lead_time
+
+
+def reorder_point(demand_mean, protection_period_periods, safety_stock):
+    return demand_mean * protection_period_periods + safety_stock
+
+
+def order_up_to_level(reorder_pt, order_qty):
+    return reorder_pt + order_qty
 
 
 def poisson_random(lam: float) -> int:
@@ -203,6 +227,13 @@ def maybe_plot(records, path):
     print(f"Plot saved to {path}")
 
 def main():
+    pp = protection_period(POLICY, R, LEAD_TIME)
+    s = reorder_point(DEMAND_MEAN, pp, SAFETY_STOCK)
+    S = order_up_to_level(s, Q)
+    initial_inventory = S
+
+    print(f"Policy: {POLICY}  protection period: {pp}  reorder point s: {s:.1f}  order-up-to S: {S:.1f}")
+
     records = simulate(
         policy=POLICY,
         S=S,
@@ -212,7 +243,7 @@ def main():
         periods=PERIODS,
         demand_mean=DEMAND_MEAN,
         lead_time=LEAD_TIME,
-        initial_inventory=INITIAL_INVENTORY,
+        initial_inventory=initial_inventory,
         seed=SEED,
     )
 

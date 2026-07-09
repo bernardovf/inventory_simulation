@@ -33,7 +33,6 @@ Orders arrive LEAD_TIME periods after being placed. Unmet demand is backordered
 import csv
 import random
 import statistics
-import matplotlib
 
 # ---- Hardcoded inputs ----
 POLICY = "RsS"

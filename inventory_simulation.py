@@ -21,6 +21,7 @@ Orders arrive LEAD_TIME periods after being placed. Unmet demand is backordered
 import csv
 import random
 import statistics
+import matplotlib
 
 # ---- Hardcoded inputs ----
 POLICY = "RsS"
@@ -31,10 +32,10 @@ s = 30  # reorder point
 PERIODS = 60
 DEMAND_MEAN = 10.0
 LEAD_TIME = 3
-INITIAL_INVENTORY = S
+INITIAL_INVENTORY = 100
 SEED = 42
 CSV_PATH = "simulation_output.csv"
-PLOT_PATH = None  # e.g. "simulation_plot.png"
+PLOT_PATH = "simulation_plot.png"  # e.g. "simulation_plot.png"
 
 
 def poisson_random(lam: float) -> int:
@@ -50,10 +51,14 @@ def poisson_random(lam: float) -> int:
         if p <= l:
             return k - 1
 
+def generate_demand(demand_mean, standard_deviation, distribution):
+    if distribution == "poisson":
+        return poisson_random(demand_mean)
+    else:
+        return demand_mean
 
 def is_review_period(t: int, review_interval: int) -> bool:
     return t % review_interval == 0
-
 
 def decide_order(policy: str, position: int, s: int, S: int, Q: int, reviewed: bool):
     """Returns (order_placed, order_qty) given the policy and current state."""
@@ -68,7 +73,6 @@ def decide_order(policy: str, position: int, s: int, S: int, Q: int, reviewed: b
     if policy in ("sQ", "RsQ"):
         return True, Q
     raise ValueError(f"Unknown policy: {policy}")
-
 
 def simulate(policy, S, R, Q, s, periods, demand_mean, lead_time, initial_inventory, seed=None):
     if seed is not None:
@@ -88,7 +92,7 @@ def simulate(policy, S, R, Q, s, periods, demand_mean, lead_time, initial_invent
         on_hand += arriving
         on_order -= arriving
 
-        demand = poisson_random(demand_mean)
+        demand = generate_demand(demand_mean, 0, "constant")
         starting_on_hand = on_hand
         on_hand -= demand
         stockout_units = max(demand - max(starting_on_hand, 0), 0)
@@ -120,7 +124,6 @@ def simulate(policy, S, R, Q, s, periods, demand_mean, lead_time, initial_invent
 
     return records
 
-
 def summarize(records):
     total_demand = sum(r["demand"] for r in records)
     total_stockout = sum(r["stockout_units"] for r in records)
@@ -143,7 +146,6 @@ def summarize(records):
         "num_orders_placed": num_orders,
         "total_units_ordered": total_ordered,
     }
-
 
 def write_csv(records, path):
     with open(path, "w", newline="") as f:
@@ -176,7 +178,6 @@ def write_csv(records, path):
                 ]
             )
 
-
 def maybe_plot(records, path):
     try:
         import matplotlib.pyplot as plt
@@ -197,9 +198,9 @@ def maybe_plot(records, path):
     plt.title("Inventory Simulation")
     plt.legend()
     plt.tight_layout()
+    plt.show()
     plt.savefig(path)
     print(f"Plot saved to {path}")
-
 
 def main():
     records = simulate(

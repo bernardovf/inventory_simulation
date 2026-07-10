@@ -12,6 +12,7 @@ PERIODS = 1000
 DEMAND_MEAN = 18000
 DEMAND_STD_DEV = 10000
 LEAD_TIME = 31
+LEAD_TIME_STD_DEV = 5
 SEED = 42
 INITIAL_INVENTORY = 800000
 DEMAND_DISTRIBUTION = "normal"
@@ -51,6 +52,15 @@ def normal_random(mean: float, std_dev: float) -> int:
     value = random.gauss(mean, std_dev)
     return max(0, round(value))
 
+def random_lead_time(mean: float, std_dev: float) -> int:
+    """Normal lead time, rounded to integer and floored at 1 period."""
+    if std_dev <= 0:
+        return max(1, round(mean))
+
+    value = random.gauss(mean, std_dev)
+    return max(1, round(value))
+
+
 def generate_demand(demand_mean, standard_deviation, distribution):
     if distribution == "poisson":
         return poisson_random(demand_mean)
@@ -76,7 +86,7 @@ def decide_order(policy: str, position: int, s: int, S: int, Q: int, reviewed: b
         return True, Q
     raise ValueError(f"Unknown policy: {policy}")
 
-def simulate(policy, order_up_to, re_period, MOQ, re_point, periods, demand_mean, lead_time, initial_inventory, seed=None):
+def simulate(policy, order_up_to, re_period, MOQ, re_point, periods, demand_mean, lead_time, lead_time_std_dev, initial_inventory, seed=None):
     if seed is not None:
         random.seed(seed)
 
@@ -105,9 +115,11 @@ def simulate(policy, order_up_to, re_period, MOQ, re_point, periods, demand_mean
         reviewed = is_review_period(t, review_interval)
         order_placed, order_qty = decide_order(policy, position, re_point, order_up_to, MOQ, reviewed)
 
+        actual_lead_time = 0
         if order_placed and order_qty > 0:
             on_order += order_qty
-            arrival_t = t + max(lead_time, 1)
+            actual_lead_time = random_lead_time(lead_time, lead_time_std_dev)
+            arrival_t = t + actual_lead_time
             arrivals[arrival_t] = arrivals.get(arrival_t, 0) + order_qty
         else:
             order_qty = 0
@@ -121,6 +133,7 @@ def simulate(policy, order_up_to, re_period, MOQ, re_point, periods, demand_mean
                 "stockout_units": stockout_units,
                 "order_placed": order_placed and order_qty > 0,
                 "order_qty": order_qty,
+                "lead_time": actual_lead_time,
             }
         )
 
@@ -154,13 +167,13 @@ def write_csv(records, path):
             [
                 "period",
                 "demand",
-                "starting_on_hand",
                 "ending_on_hand",
                 "on_order",
                 "inventory_position",
                 "stockout_units",
                 "order_placed",
                 "order_qty",
+                "lead_time",
             ]
         )
         for r in records:
@@ -174,6 +187,7 @@ def write_csv(records, path):
                     r["stockout_units"],
                     r["order_placed"],
                     r["order_qty"],
+                    r["lead_time"],
                 ]
             )
 
@@ -215,6 +229,7 @@ def main():
         periods=PERIODS,
         demand_mean=DEMAND_MEAN,
         lead_time=LEAD_TIME,
+        lead_time_std_dev=LEAD_TIME_STD_DEV,
         initial_inventory=initial_inventory,
         seed=SEED,
     )

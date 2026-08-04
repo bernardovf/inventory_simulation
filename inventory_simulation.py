@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-def simulate_inventory(demand, policy, lead_time, initial_on_hand, safety_stock, MOQ=None, Review_Period=None):
+def simulate_inventory(demand, forecast, policy, lead_time, initial_on_hand, safety_stock, MOQ=None, Review_Period=None):
     valid_policies = {
         "(s,Q)",
         "(R,S)",
@@ -11,6 +11,7 @@ def simulate_inventory(demand, policy, lead_time, initial_on_hand, safety_stock,
         "(R,s,Q)"}
 
     demand = np.asarray(demand, dtype=float)
+    forecast = np.asarray(forecast, dtype=float)
     periods = len(demand)
 
     # Extra space is needed for orders arriving after the simulation horizon
@@ -55,13 +56,13 @@ def simulate_inventory(demand, policy, lead_time, initial_on_hand, safety_stock,
         qty = 0
 
         # Demand over the upcoming lead time / protection period, taken from the
-        # actual future demand rather than the series-wide average.
-        future_demand = demand[t + 1:]
-        demand_lead_time = future_demand[:lead_time].sum()
-        demand_protection_period = future_demand[:lead_time + Review_Period].sum()
+        # forecast (not the actual future demand, which wouldn't be known yet).
+        future_forecast = forecast[t + 1:]
+        forecast_lead_time = future_forecast[:lead_time].sum()
+        forecast_protection_period = future_forecast[:lead_time + Review_Period].sum()
 
-        s = demand_lead_time + safety_stock
-        S = demand_protection_period + safety_stock
+        s = forecast_lead_time + safety_stock
+        S = forecast_protection_period + safety_stock
 
         reorder_point[t] = s
         order_up_to_level[t] = S
@@ -98,6 +99,7 @@ def simulate_inventory(demand, policy, lead_time, initial_on_hand, safety_stock,
     results = pd.DataFrame({
         "Period": np.arange(periods),
         "Demand": demand,
+        "Forecast": forecast,
         "Receipts": receipts,
         "Fulfilled_Demand": fulfilled_demand,
         "Lost_Sales": lost_sales,
@@ -117,8 +119,15 @@ time = 500
 warm_up_period = 60
 demand_average = 100
 demand_std_deviation = 75
+forecast_error_cov = 0.3  # std dev of forecast error, as a fraction of average demand
 
 demand = np.maximum(rng.normal(demand_average, demand_std_deviation, time).round(),0)
+
+# The forecast is a noisy estimate of demand - it drives the reorder point / order-up-to
+# level, while the simulation itself is still driven by actual demand above.
+forecast_error_std = forecast_error_cov * demand_average
+forecast = np.maximum(demand + rng.normal(0, forecast_error_std, time).round(), 0)
+
 init_on_hand = 100
 average_lead_time = 8
 MOQ = 500
@@ -133,6 +142,7 @@ for safety_stock_units in range(50, 750, 50):
     for pol in policies:
         results_pol = simulate_inventory(
             demand=demand,
+            forecast=forecast,
             policy=pol,
             lead_time=average_lead_time,
             initial_on_hand=init_on_hand,

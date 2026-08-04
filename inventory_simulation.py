@@ -134,49 +134,58 @@ demand_average = 100
 demand_std_deviation = 75
 forecast_error_cov = 0.3  # std dev of forecast error, as a fraction of average demand
 
-demand = np.maximum(rng.normal(demand_average, demand_std_deviation, time).round(),0)
-
-# The forecast is a noisy estimate of demand - it drives the reorder point / order-up-to
-# level, while the simulation itself is still driven by actual demand above.
-forecast_error_std = forecast_error_cov * demand_average
-forecast = np.maximum(demand + rng.normal(0, forecast_error_std, time).round(), 0)
-
 init_on_hand = 100
 average_lead_time = 8
 lead_time_std_dev = 2
 MOQ = 500
 review_period = 1
-safety_stock_units = 0
 
 policies = ["(C,MOQ)", "(C,No MOQ)", "(P,MOQ)", "(P,Non MOQ)"]
 safety_stock_range = range(50, 750, 50)
+n_simulations = 20  # Monte Carlo replications to average per (safety_stock, policy)
 
 results = {}
-fill_rate_by_policy = {pol: [] for pol in policies}
+fill_rate_sum = {pol: [0.0] * len(safety_stock_range) for pol in policies}
 
-for safety_stock_units in safety_stock_range:
+for sim in range(n_simulations):
+    demand = np.maximum(rng.normal(demand_average, demand_std_deviation, time).round(), 0)
+
+    # The forecast is a noisy estimate of demand - it drives the reorder point / order-up-to
+    # level, while the simulation itself is still driven by actual demand above.
+    forecast_error_std = forecast_error_cov * demand_average
+    forecast = np.maximum(demand + rng.normal(0, forecast_error_std, time).round(), 0)
+
+    for i, safety_stock_units in enumerate(safety_stock_range):
+        for pol in policies:
+            results_pol = simulate_inventory(
+                demand=demand,
+                forecast=forecast,
+                policy=pol,
+                lead_time=average_lead_time,
+                lead_time_std_dev=lead_time_std_dev,
+                initial_on_hand=init_on_hand,
+                safety_stock=safety_stock_units,
+                MOQ=MOQ,
+                Review_Period=review_period,
+                rng=rng)
+
+            results_pol = results_pol[results_pol["Period"] > warm_up_period]
+            total_demand = results_pol["Demand"].sum()
+            total_fulfilled = results_pol["Fulfilled_Demand"].sum()
+            fill_rate = (total_fulfilled / total_demand
+                if total_demand > 0
+                else float("nan"))
+            fill_rate_sum[pol][i] += fill_rate
+            results[pol] = results_pol
+
+fill_rate_by_policy = {
+    pol: [total / n_simulations for total in fill_rate_sum[pol]]
+    for pol in policies
+}
+
+for i, safety_stock_units in enumerate(safety_stock_range):
     for pol in policies:
-        results_pol = simulate_inventory(
-            demand=demand,
-            forecast=forecast,
-            policy=pol,
-            lead_time=average_lead_time,
-            lead_time_std_dev=lead_time_std_dev,
-            initial_on_hand=init_on_hand,
-            safety_stock=safety_stock_units,
-            MOQ=MOQ,
-            Review_Period=review_period,
-            rng=rng)
-
-        results_pol = results_pol[results_pol["Period"] > warm_up_period]
-        total_demand = results_pol["Demand"].sum()
-        total_fulfilled = results_pol["Fulfilled_Demand"].sum()
-        fill_rate = (total_fulfilled / total_demand
-            if total_demand > 0
-            else float("nan"))
-        print(f"{safety_stock_units}, {pol}: {fill_rate:.1%}")
-        fill_rate_by_policy[pol].append(fill_rate)
-        results[pol] = results_pol
+        print(f"{safety_stock_units}, {pol}: {fill_rate_by_policy[pol][i]:.1%}")
     print("")
 
 fig_fill_rate, ax_fill_rate = plt.subplots(figsize=(10, 6))

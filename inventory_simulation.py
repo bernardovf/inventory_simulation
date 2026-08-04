@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-def simulate_inventory(demand, forecast, policy, lead_time, initial_on_hand, safety_stock, MOQ=None, Review_Period=None):
+def simulate_inventory(demand, forecast, policy, lead_time, initial_on_hand, safety_stock, MOQ=None, Review_Period=None, lead_time_std_dev=0, rng=None):
     valid_policies = {
         "(s,Q)",
         "(R,S)",
@@ -10,12 +10,17 @@ def simulate_inventory(demand, forecast, policy, lead_time, initial_on_hand, saf
         "(R,s,S)",
         "(R,s,Q)"}
 
+    if rng is None:
+        rng = np.random.default_rng()
+
     demand = np.asarray(demand, dtype=float)
     forecast = np.asarray(forecast, dtype=float)
     periods = len(demand)
 
-    # Extra space is needed for orders arriving after the simulation horizon
-    scheduled_receipts = np.zeros(periods + lead_time + 1, dtype=float)
+    # Extra space is needed for orders arriving after the simulation horizon;
+    # padded generously so a long random lead time doesn't fall off the end.
+    max_lead_time = lead_time + round(4 * lead_time_std_dev)
+    scheduled_receipts = np.zeros(periods + max_lead_time + 1, dtype=float)
 
     on_hand = np.zeros(periods)
     receipts = np.zeros(periods)
@@ -27,6 +32,7 @@ def simulate_inventory(demand, forecast, policy, lead_time, initial_on_hand, saf
     inventory_position_after_order = np.zeros(periods)
     reorder_point = np.zeros(periods)
     order_up_to_level = np.zeros(periods)
+    realized_lead_time = np.zeros(periods)
 
     for t in range(periods):
 
@@ -89,7 +95,13 @@ def simulate_inventory(demand, forecast, policy, lead_time, initial_on_hand, saf
 
         # 5. Schedule the order receipt
         if qty > 0:
-            arrival_period = t + lead_time
+            if lead_time_std_dev > 0:
+                actual_lead_time = max(1, round(rng.normal(lead_time, lead_time_std_dev)))
+            else:
+                actual_lead_time = lead_time
+
+            realized_lead_time[t] = actual_lead_time
+            arrival_period = t + actual_lead_time
 
             if arrival_period < len(scheduled_receipts):
                 scheduled_receipts[arrival_period] += qty
@@ -105,6 +117,7 @@ def simulate_inventory(demand, forecast, policy, lead_time, initial_on_hand, saf
         "Lost_Sales": lost_sales,
         "On_Hand": on_hand,
         "Order_Qty": order_qty,
+        "Lead_Time": realized_lead_time,
         "Reorder_Point": reorder_point,
         "Order_Up_To_Level": order_up_to_level,
         "Inventory_Position_Before_Order": inventory_position_before_order,
@@ -130,6 +143,7 @@ forecast = np.maximum(demand + rng.normal(0, forecast_error_std, time).round(), 
 
 init_on_hand = 100
 average_lead_time = 8
+lead_time_std_dev = 2
 MOQ = 500
 review_period = 1
 safety_stock_units = 0
@@ -147,10 +161,12 @@ for safety_stock_units in safety_stock_range:
             forecast=forecast,
             policy=pol,
             lead_time=average_lead_time,
+            lead_time_std_dev=lead_time_std_dev,
             initial_on_hand=init_on_hand,
             safety_stock=safety_stock_units,
             MOQ=MOQ,
-            Review_Period=review_period)
+            Review_Period=review_period,
+            rng=rng)
 
         results_pol = results_pol[results_pol["Period"] > warm_up_period]
         total_demand = results_pol["Demand"].sum()

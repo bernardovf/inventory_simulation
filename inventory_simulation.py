@@ -1,253 +1,174 @@
-#!/usr/bin/env python3
-import csv
-import random
-import statistics
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 
-# ---- Hardcoded inputs ----
-POLICY = "RsS"
-re_period = 7  # review period
-MOQ = 20000  # order quantity
-SAFETY_STOCK = 20000  # units
-PERIODS = 1000
-DEMAND_MEAN = 18000
-DEMAND_STD_DEV = 10000
-LEAD_TIME = 31
-LEAD_TIME_STD_DEV = 5
-SEED = 42
-INITIAL_INVENTORY = 800000
-DEMAND_DISTRIBUTION = "normal"
-CSV_PATH = "simulation_output.csv"
-PLOT_PATH = "simulation_plot.png"  # e.g. "simulation_plot.png"
-WARMUP_PERIOD = 50
+def simulate_inventory(demand, policy, lead_time, initial_on_hand, safety_stock, MOQ=None, Review_Period=None):
+    valid_policies = {
+        "(s,Q)",
+        "(R,S)",
+        "(s,S)",
+        "(R,s,S)",
+        "(R,s,Q)"}
 
-def protection_period(policy, review_period, lead_time):
-    if policy in ("sQ", "sS"):
-        return lead_time
-    return review_period + lead_time
+    demand = np.asarray(demand, dtype=float)
+    periods = len(demand)
+    mean_demand = demand.mean()
+    demand_lead_time = mean_demand * lead_time
+    demand_review_period = mean_demand * Review_Period
 
-def reorder_point(demand_mean, protection_period_periods, safety_stock):
-    return demand_mean * protection_period_periods + safety_stock
+    # Extra space is needed for orders arriving after the simulation horizon
+    scheduled_receipts = np.zeros(periods + lead_time + 1, dtype=float)
 
-def order_up_to_level(reorder_pt, order_qty):
-    return reorder_pt + order_qty
+    on_hand = np.zeros(periods)
+    receipts = np.zeros(periods)
+    order_qty = np.zeros(periods)
+    fulfilled_demand = np.zeros(periods)
+    lost_sales = np.zeros(periods)
 
-def poisson_random(lam: float) -> int:
-    """Knuth's algorithm, no numpy required."""
-    if lam <= 0:
-        return 0
-    l = pow(2.718281828459045, -lam)
-    k = 0
-    p = 1.0
-    while True:
-        k += 1
-        p *= random.random()
-        if p <= l:
-            return k - 1
-
-def normal_random(mean: float, std_dev: float) -> int:
-    """Normal demand, rounded to integer and truncated at zero."""
-    if std_dev <= 0:
-        return max(0, round(mean))
-
-    value = random.gauss(mean, std_dev)
-    return max(0, round(value))
-
-def random_lead_time(mean: float, std_dev: float) -> int:
-    """Normal lead time, rounded to integer and floored at 1 period."""
-    if std_dev <= 0:
-        return max(1, round(mean))
-
-    value = random.gauss(mean, std_dev)
-    return max(1, round(value))
-
-
-def generate_demand(demand_mean, standard_deviation, distribution):
-    if distribution == "poisson":
-        return poisson_random(demand_mean)
-    elif distribution == "normal":
-        return normal_random(demand_mean, standard_deviation)
-    else:
-        return demand_mean
-
-def is_review_period(t: int, review_interval: int) -> bool:
-    return t % review_interval == 0
-
-def decide_order(policy: str, position: int, s: int, S: int, Q: int, reviewed: bool):
-    """Returns (order_placed, order_qty) given the policy and current state."""
-    if not reviewed:
-        return False, 0
-    if policy == "RS":
-        return True, max(S - position, 0)
-    if position > s:
-        return False, 0
-    if policy in ("sS", "RsS"):
-        return True, max(S - position, 0)
-    if policy in ("sQ", "RsQ"):
-        return True, Q
-    raise ValueError(f"Unknown policy: {policy}")
-
-def simulate(policy, order_up_to, re_period, MOQ, re_point, periods, demand_mean, lead_time, lead_time_std_dev, initial_inventory, seed=None):
-    if seed is not None:
-        random.seed(seed)
-
-    continuous = policy in ("sQ", "sS")
-    review_interval = 1 if continuous else re_period
-
-    on_hand = initial_inventory
-    on_order = 0
-    arrivals = {}  # period -> quantity arriving that period
-
-    records = []
+    inventory_position_before_order = np.zeros(periods)
+    inventory_position_after_order = np.zeros(periods)
 
     for t in range(periods):
-        arriving = arrivals.pop(t, 0)
-        on_hand += arriving
-        on_order -= arriving
 
-        demand = generate_demand(DEMAND_MEAN, DEMAND_STD_DEV, "normal")
+        # 1. Receive orders due today
+        receipts[t] = scheduled_receipts[t]
 
-        sales = min(on_hand, demand)
-        stockout_units = demand - sales
-        on_hand -= sales
-
-        position = on_hand + on_order
-
-        reviewed = is_review_period(t, review_interval)
-        order_placed, order_qty = decide_order(policy, position, re_point, order_up_to, MOQ, reviewed)
-
-        actual_lead_time = 0
-        if order_placed and order_qty > 0:
-            on_order += order_qty
-            actual_lead_time = random_lead_time(lead_time, lead_time_std_dev)
-            arrival_t = t + actual_lead_time
-            arrivals[arrival_t] = arrivals.get(arrival_t, 0) + order_qty
+        if t == 0:
+            available = initial_on_hand + receipts[t]
         else:
-            order_qty = 0
-        records.append(
-            {
-                "period": t,
-                "demand": demand,
-                "ending_on_hand": on_hand,
-                "on_order": on_order,
-                "inventory_position": on_hand + on_order,
-                "stockout_units": stockout_units,
-                "order_placed": order_placed and order_qty > 0,
-                "order_qty": order_qty,
-                "lead_time": actual_lead_time,
-            }
-        )
+            available = on_hand[t - 1] + receipts[t]
 
-    return records
+        # 2. Satisfy demand
+        fulfilled_demand[t] = min(available, demand[t])
+        lost_sales[t] = demand[t] - fulfilled_demand[t]
 
-def summarize(records):
-    records = records[WARMUP_PERIOD:]
-    total_demand = sum(r["demand"] for r in records)
-    total_stockout = sum(r["stockout_units"] for r in records)
-    periods_with_stockout = sum(1 for r in records if r["stockout_units"] > 0)
-    avg_on_hand = statistics.mean(max(r["ending_on_hand"], 0) for r in records)
-    avg_position = statistics.mean(r["inventory_position"] for r in records)
-    num_orders = sum(1 for r in records if r["order_placed"])
-    total_ordered = sum(r["order_qty"] for r in records)
-    n = len(records)
-    fill_rate = 1 - (total_stockout / total_demand) if total_demand else 1.0
-    return {
-        "periods": n,
-        "total_demand": round(total_demand, 0),
-        "total_stockout_units": round(total_stockout, 0),
-        "fill_rate": fill_rate,
-        "avg_on_hand_inventory": avg_on_hand,
-        "num_orders_placed": num_orders,
-        "total_units_ordered": total_ordered,
-    }
+        on_hand[t] = available - fulfilled_demand[t]
 
-def write_csv(records, path):
-    with open(path, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(
-            [
-                "period",
-                "demand",
-                "ending_on_hand",
-                "on_order",
-                "inventory_position",
-                "stockout_units",
-                "order_placed",
-                "order_qty",
-                "lead_time",
-            ]
-        )
-        for r in records:
-            writer.writerow(
-                [
-                    r["period"],
-                    r["demand"],
-                    r["ending_on_hand"],
-                    r["on_order"],
-                    r["inventory_position"],
-                    r["stockout_units"],
-                    r["order_placed"],
-                    r["order_qty"],
-                    r["lead_time"],
-                ]
-            )
+        # Orders already scheduled after today
+        pipeline = scheduled_receipts[t + 1:].sum()
 
-def maybe_plot(records, path):
-    try:
-        import matplotlib.pyplot as plt
-    except ImportError:
-        print("matplotlib not installed; skipping plot (pip install matplotlib to enable).")
-        return
+        # 3. Inventory position before today's new order
+        inventory_position_before_order[t] = on_hand[t] + pipeline
 
-    records = records[WARMUP_PERIOD:]
-    periods = [r["period"] for r in records]
-    on_hand = [r["ending_on_hand"] for r in records]
+        ip = inventory_position_before_order[t]
 
-    plt.figure(figsize=(10, 5))
-    plt.plot(periods, on_hand, label="On-hand inventory")
-    plt.axhline(0, color="black", linewidth=0.5)
-    plt.xlabel("Period")
-    plt.ylabel("Units")
-    plt.title("Inventory Simulation")
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-    plt.savefig(path)
-    print(f"Plot saved to {path}")
+        # 4. Apply the selected policy
+        qty = 0
 
-def main():
-    prot_period = protection_period(POLICY, re_period, LEAD_TIME)
-    re_point = reorder_point(DEMAND_MEAN, prot_period, SAFETY_STOCK)
-    order_up_to = order_up_to_level(re_point, MOQ)
-    initial_inventory = INITIAL_INVENTORY
+        s = demand_lead_time + safety_stock
+        S = demand_lead_time + demand_review_period + safety_stock
 
-    records = simulate(
-        policy=POLICY,
-        order_up_to=order_up_to,
-        re_period=re_period,
-        MOQ=MOQ,
-        re_point=re_point,
-        periods=PERIODS,
-        demand_mean=DEMAND_MEAN,
-        lead_time=LEAD_TIME,
-        lead_time_std_dev=LEAD_TIME_STD_DEV,
-        initial_inventory=initial_inventory,
-        seed=SEED,
-    )
+        policies = ["(C,MOQ)", "(C,No MOQ)", "(P,MOQ)", "(P,Non MOQ)"]
 
-    write_csv(records, CSV_PATH)
-    print(f"Wrote {len(records)} periods to {CSV_PATH}")
+        if policy == "(C,MOQ)":
+            if ip <= s:
+                qty = max(MOQ, S - ip)
 
-    summary = summarize(records)
-    print("\nSummary:")
-    for k, v in summary.items():
-        if isinstance(v, float):
-            print(f"  {k}: {v:.3f}")
-        else:
-            print(f"  {k}: {v}")
+        elif policy == "(C,No MOQ)":
+            if ip <= s:
+                qty = max(0, S - ip)
 
-    if PLOT_PATH:
-        maybe_plot(records, PLOT_PATH)
+        elif policy == "(P,MOQ)":
+            if t % Review_Period == 0 and ip <= s:
+                qty = max(MOQ, S - ip)
+
+        elif policy == "(P,Non MOQ)":
+            if t % Review_Period == 0 and ip <= s:
+                qty = max(0, S - ip)
+
+        order_qty[t] = qty
+
+        # 5. Schedule the order receipt
+        if qty > 0:
+            arrival_period = t + lead_time
+
+            if arrival_period < len(scheduled_receipts):
+                scheduled_receipts[arrival_period] += qty
+
+        inventory_position_after_order[t] = ip + qty
+
+    results = pd.DataFrame({
+        "Period": np.arange(periods),
+        "Demand": demand,
+        "Receipts": receipts,
+        "Fulfilled_Demand": fulfilled_demand,
+        "Lost_Sales": lost_sales,
+        "On_Hand": on_hand,
+        "Order_Qty": order_qty,
+        "Inventory_Position_Before_Order": inventory_position_before_order,
+        "Inventory_Position_After_Order": inventory_position_after_order
+    })
+
+    return results
+
+rng = np.random.default_rng(42)
+
+time = 500
+warm_up_period = 60
+demand_average = 100
+demand_std_deviation = 75
+
+demand = np.maximum(rng.normal(demand_average, demand_std_deviation, time).round(),0)
+init_on_hand = 100
+average_lead_time = 8
+MOQ = 500
+review_period = 1
+safety_stock_units = 0
+
+policies = ["(C,MOQ)", "(C,No MOQ)", "(P,MOQ)", "(P,Non MOQ)"]
+
+results = {}
+
+for safety_stock_units in range(50, 750, 50):
+    for pol in policies:
+        results_pol = simulate_inventory(
+            demand=demand,
+            policy=pol,
+            lead_time=average_lead_time,
+            initial_on_hand=init_on_hand,
+            safety_stock=safety_stock_units,
+            MOQ=MOQ,
+            Review_Period=review_period)
+
+        results_pol = results_pol[results_pol["Period"] > warm_up_period]
+        total_demand = results_pol["Demand"].sum()
+        total_fulfilled = results_pol["Fulfilled_Demand"].sum()
+        fill_rate = (total_fulfilled / total_demand
+            if total_demand > 0
+            else float("nan"))
+        print(f"{safety_stock_units}, {pol}: {fill_rate:.1%}")
+        results[pol] = results_pol
+    print("")
+
+exit()
 
 
-if __name__ == "__main__":
-    main()
+fig, axes = plt.subplots(2, 2, figsize=(18, 14), sharex=True)
+
+axes = axes.flatten()
+
+for ax, (name, df) in zip(axes, results.items()):
+    ax.plot(df["Period"], df["On_Hand"], linewidth=2)
+    receipt_rows = df["Receipts"] > 0
+    ax.set_ylim(bottom=0)
+    ax.set_title(name)
+    ax.grid(alpha=0.5)
+
+# Hide the unused plots
+for ax in axes[len(results):]:
+    ax.axis("off")
+
+# Single legend for the whole figure
+handles, labels = axes[0].get_legend_handles_labels()
+fig.legend(
+    handles,
+    labels,
+    loc="upper center",
+    ncol=3,
+    bbox_to_anchor=(0.5, 1.0)
+)
+
+fig.supxlabel("Period")
+
+plt.tight_layout(rect=[0, 0, 1, 0.99])
+plt.show()

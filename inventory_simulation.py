@@ -135,10 +135,12 @@ review_period = 1
 safety_stock_units = 0
 
 policies = ["(C,MOQ)", "(C,No MOQ)", "(P,MOQ)", "(P,Non MOQ)"]
+safety_stock_range = range(50, 750, 50)
 
 results = {}
+fill_rate_by_policy = {pol: [] for pol in policies}
 
-for safety_stock_units in range(50, 750, 50):
+for safety_stock_units in safety_stock_range:
     for pol in policies:
         results_pol = simulate_inventory(
             demand=demand,
@@ -157,8 +159,25 @@ for safety_stock_units in range(50, 750, 50):
             if total_demand > 0
             else float("nan"))
         print(f"{safety_stock_units}, {pol}: {fill_rate:.1%}")
+        fill_rate_by_policy[pol].append(fill_rate)
         results[pol] = results_pol
     print("")
+
+fig_fill_rate, ax_fill_rate = plt.subplots(figsize=(10, 6))
+
+for pol in policies:
+    ax_fill_rate.plot(list(safety_stock_range), fill_rate_by_policy[pol], marker="o", linewidth=2, label=pol)
+
+ax_fill_rate.set_xlabel("Safety stock (units)")
+ax_fill_rate.set_ylabel("Fill rate")
+ax_fill_rate.set_title("Fill rate vs. safety stock, by policy")
+ax_fill_rate.yaxis.set_major_formatter(lambda y, _: f"{y:.1%}")
+ax_fill_rate.grid(alpha=0.5)
+ax_fill_rate.legend()
+
+fig_fill_rate.tight_layout()
+fig_fill_rate.savefig("fill_rate_by_safety_stock.png")
+plt.show()
 
 exit()
 

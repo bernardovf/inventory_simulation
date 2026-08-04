@@ -12,9 +12,6 @@ def simulate_inventory(demand, policy, lead_time, initial_on_hand, safety_stock,
 
     demand = np.asarray(demand, dtype=float)
     periods = len(demand)
-    mean_demand = demand.mean()
-    demand_lead_time = mean_demand * lead_time
-    demand_review_period = mean_demand * Review_Period
 
     # Extra space is needed for orders arriving after the simulation horizon
     scheduled_receipts = np.zeros(periods + lead_time + 1, dtype=float)
@@ -27,6 +24,8 @@ def simulate_inventory(demand, policy, lead_time, initial_on_hand, safety_stock,
 
     inventory_position_before_order = np.zeros(periods)
     inventory_position_after_order = np.zeros(periods)
+    reorder_point = np.zeros(periods)
+    order_up_to_level = np.zeros(periods)
 
     for t in range(periods):
 
@@ -55,8 +54,17 @@ def simulate_inventory(demand, policy, lead_time, initial_on_hand, safety_stock,
         # 4. Apply the selected policy
         qty = 0
 
+        # Demand over the upcoming lead time / protection period, taken from the
+        # actual future demand rather than the series-wide average.
+        future_demand = demand[t + 1:]
+        demand_lead_time = future_demand[:lead_time].sum()
+        demand_protection_period = future_demand[:lead_time + Review_Period].sum()
+
         s = demand_lead_time + safety_stock
-        S = demand_lead_time + demand_review_period + safety_stock
+        S = demand_protection_period + safety_stock
+
+        reorder_point[t] = s
+        order_up_to_level[t] = S
 
         policies = ["(C,MOQ)", "(C,No MOQ)", "(P,MOQ)", "(P,Non MOQ)"]
 
@@ -95,6 +103,8 @@ def simulate_inventory(demand, policy, lead_time, initial_on_hand, safety_stock,
         "Lost_Sales": lost_sales,
         "On_Hand": on_hand,
         "Order_Qty": order_qty,
+        "Reorder_Point": reorder_point,
+        "Order_Up_To_Level": order_up_to_level,
         "Inventory_Position_Before_Order": inventory_position_before_order,
         "Inventory_Position_After_Order": inventory_position_after_order
     })

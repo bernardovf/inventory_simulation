@@ -117,8 +117,9 @@ rng = np.random.default_rng(42)
 # Real demand history (columns: Site, Product, Date, Demand).
 historical_demand_csv = "historical_demand.csv"
 # Per-Site/Product parameters (columns: Site, Product, Forecast Error Cov,
-# Average Lead Time, Std Dev Lead Time, MOQ) - one row per Site/Product to
-# simulate.
+# Average Lead Time, Std Dev Lead Time, MOQ, SS Settings) - one row per
+# Site/Product to simulate. SS Settings is the site/product's current
+# safety stock setting; it's swept from half to double that value.
 site_product_parameters_csv = "site_product_parameters.csv"
 output_csv = "fill_rate_by_site_product.csv"
 
@@ -127,7 +128,7 @@ init_on_hand = 30000
 review_period = 7
 plot_historical_inventory = False
 
-safety_stock_range = range(10000, 80000, 10000)
+safety_stock_steps = 20  # number of safety stock levels to simulate, from SS Settings / 2 to SS Settings * 2
 n_simulations = 100  # Monte Carlo replications to average per (safety_stock, policy)
 
 parameters = load_site_product_parameters(site_product_parameters_csv)
@@ -141,6 +142,9 @@ for _, param_row in parameters.iterrows():
     average_lead_time = int(round(param_row["Average_Lead_Time"]))
     lead_time_std_dev = param_row["Lead_Time_Std_Dev"]
     MOQ = param_row["MOQ"]
+    ss_settings = param_row["SS_Settings"]
+
+    safety_stock_range = np.linspace(ss_settings / 2, ss_settings * 2, safety_stock_steps)
 
     demand_history = load_historical_demand(historical_demand_csv, site=site, product=product)
     time = len(demand_history)

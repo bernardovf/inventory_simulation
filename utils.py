@@ -33,7 +33,7 @@ def load_site_product_parameters(path):
 
     Expects one row per Site/Product with columns Site, Product, and
     (case/spacing-insensitive) Forecast Error Cov, Average Lead Time,
-    Std Dev Lead Time, MOQ.
+    Std Dev Lead Time, MOQ, SS Settings.
     """
     canonical_names = {
         "site": "Site",
@@ -42,6 +42,7 @@ def load_site_product_parameters(path):
         "averageleadtime": "Average_Lead_Time",
         "stddevleadtime": "Lead_Time_Std_Dev",
         "moq": "MOQ",
+        "sssettings": "SS_Settings",
     }
 
     def normalize(col):

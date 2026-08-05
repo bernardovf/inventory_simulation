@@ -1,31 +1,26 @@
-import numpy as np
 import pandas as pd
 
-def load_historical_demand(path, site=None, site_col="Site", period_col="Period", date_col="Date", quantity_col="Quantity"):
-    """Load a historical demand CSV (columns: Site, Period, Date, Quantity).
+def load_historical_demand(path, site, product, site_col="Site", product_col="Product", date_col="Date", quantity_col="Demand"):
+    """Load a historical demand CSV (columns: Site, Product, Date, Demand).
 
-    Returns a 1-D array of demand quantities ordered by Period, with any gaps
-    in the period sequence filled in as zero demand. Raises if the file
-    contains more than one site and `site` isn't given to pick one.
+    Filters to the given site/product first, then returns a 1-D array of
+    daily demand quantities spanning every day from the earliest to the
+    latest date found for that site/product, with any day missing from the
+    file treated as zero demand.
     """
     demand_df = pd.read_csv(path)
+    demand_df = demand_df[(demand_df[site_col] == site) & (demand_df[product_col] == product)]
+
+    if demand_df.empty:
+        raise ValueError(f"No rows found for {site_col}={site!r}, {product_col}={product!r}")
+
     demand_df[date_col] = pd.to_datetime(demand_df[date_col])
+    demand_df = demand_df.sort_values(date_col)
 
-    if site is not None:
-        demand_df = demand_df[demand_df[site_col] == site]
-
-    sites = demand_df[site_col].unique()
-    if len(sites) != 1:
-        raise ValueError(
-            f"Expected exactly one site in the historical demand data, got {sorted(sites)}. "
-            "Pass `site=` to select one.")
-
-    demand_df = demand_df.sort_values(period_col)
-
-    full_periods = pd.DataFrame({
-        period_col: np.arange(demand_df[period_col].min(), demand_df[period_col].max() + 1)
+    full_dates = pd.DataFrame({
+        date_col: pd.date_range(demand_df[date_col].min(), demand_df[date_col].max(), freq="D")
     })
-    demand_df = full_periods.merge(demand_df, on=period_col, how="left")
+    demand_df = full_dates.merge(demand_df, on=date_col, how="left")
     demand_df[quantity_col] = demand_df[quantity_col].fillna(0)
 
     return demand_df[quantity_col].to_numpy(dtype=float)

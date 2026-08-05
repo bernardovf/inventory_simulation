@@ -133,15 +133,20 @@ rng = np.random.default_rng(42)
 # --- Demand source -----------------------------------------------------
 # Leave `historical_demand_csv` as None to simulate with synthetic demand
 # (`demand_average` / `demand_std_deviation` below). To use real demand
-# instead, set it to a CSV path with columns Site, Period, Date, Quantity
-# (and `historical_demand_site` if the file has more than one Site) - in
-# that case only `forecast_error_cov` is needed, since the forecast is
-# generated from the historical demand rather than from `demand_average`.
+# instead, set it to a CSV path with columns Site, Product, Date, Demand,
+# along with the `historical_demand_site` / `historical_demand_product` to
+# filter to - in that case only `forecast_error_cov` is needed, since the
+# forecast is generated from the historical demand rather than from
+# `demand_average`.
 historical_demand_csv = None  # e.g. "historical_demand.csv"
-historical_demand_site = None  # required if the CSV has more than one Site
+historical_demand_site = None  # e.g. "US10"
+historical_demand_product = None  # e.g. "1001125"
 
 if historical_demand_csv:
-    demand_history = load_historical_demand(historical_demand_csv, site=historical_demand_site)
+    demand_history = load_historical_demand(
+        historical_demand_csv,
+        site=historical_demand_site,
+        product=historical_demand_product)
     time = len(demand_history)
     demand_average = demand_history.mean()
 else:

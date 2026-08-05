@@ -3,7 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.ticker import PercentFormatter
 
-from utils import load_historical_demand
+from utils import load_historical_demand, load_site_product_parameters
 
 def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stock, MOQ=None, Review_Period=None, lead_time_std_dev=0, rng=None):
     if rng is None:
@@ -113,127 +113,119 @@ def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stoc
 
 rng = np.random.default_rng(42)
 
-# --- Demand source -----------------------------------------------------
-# Leave `historical_demand_csv` as None to simulate with synthetic demand
-# (`demand_average` / `demand_std_deviation` below). To use real demand
-# instead, set it to a CSV path with columns Site, Product, Date, Demand,
-# along with the `historical_demand_site` / `historical_demand_product` to
-# filter to - in that case only `forecast_error_cov` is needed, since the
-# forecast is generated from the historical demand rather than from
-# `demand_average`.
-historical_demand_csv = "historical_demand.csv"  # e.g. "historical_demand.csv"
-historical_demand_site = "US10"  # e.g. "US10"
-historical_demand_product = "1001125"  # e.g. "1001125"
-
-if historical_demand_csv:
-    demand_history = load_historical_demand(historical_demand_csv, site=historical_demand_site, product=historical_demand_product)
-    time = len(demand_history)
-    demand_average = demand_history.mean()
-    historical_dates = demand_history.index.to_numpy()
-else:
-    time = 500
-    demand_average = 100
-    demand_std_deviation = 75
-    historical_dates = None
+# --- Data sources --------------------------------------------------------
+# Real demand history (columns: Site, Product, Date, Demand).
+historical_demand_csv = "historical_demand.csv"
+# Per-Site/Product parameters (columns: Site, Product, Forecast Error Cov,
+# Average Lead Time, Std Dev Lead Time, MOQ) - one row per Site/Product to
+# simulate.
+site_product_parameters_csv = "site_product_parameters.csv"
+output_csv = "fill_rate_by_site_product.csv"
 
 warm_up_period = 90
-forecast_error_cov = 0.32  # std dev of forecast error, as a fraction of average demand
 init_on_hand = 30000
-average_lead_time = 39
-lead_time_std_dev = 1
-MOQ = 18188
 review_period = 7
 plot_historical_inventory = False
 
 safety_stock_range = range(10000, 80000, 10000)
-
 n_simulations = 100  # Monte Carlo replications to average per (safety_stock, policy)
 
-results = {}
-fill_rate_by_ss = {}
-for i, safety_stock_units in enumerate(safety_stock_range):
-    fill_rate_by_ss[safety_stock_units] = 0
+parameters = load_site_product_parameters(site_product_parameters_csv)
 
-for sim in range(n_simulations):
-    if historical_demand_csv:
-        demand = demand_history
-    else:
-        demand = np.maximum(rng.normal(demand_average, demand_std_deviation, time).round(), 0)
+output_rows = []
 
-    # The forecast is a noisy estimate of demand - it drives the reorder point / order-up-to
-    # level, while the simulation itself is still driven by actual demand above.
-    forecast_error_std = forecast_error_cov * demand_average
-    forecast = np.maximum(demand + rng.normal(0, forecast_error_std, time).round(), 0)
+for _, param_row in parameters.iterrows():
+    site = param_row["Site"]
+    product = param_row["Product"]
+    forecast_error_cov = param_row["Forecast_Error_Cov"]
+    average_lead_time = int(round(param_row["Average_Lead_Time"]))
+    lead_time_std_dev = param_row["Lead_Time_Std_Dev"]
+    MOQ = param_row["MOQ"]
 
-    for i, safety_stock_units in enumerate(safety_stock_range):
-        results = simulate_inventory(
-            demand=demand,
-            forecast=forecast,
-            lead_time=average_lead_time,
-            lead_time_std_dev=lead_time_std_dev,
-            initial_on_hand=init_on_hand,
-            safety_stock=safety_stock_units,
-            MOQ=MOQ,
-            Review_Period=review_period,
-            rng=rng)
+    demand_history = load_historical_demand(historical_demand_csv, site=site, product=product)
+    time = len(demand_history)
+    demand_average = demand_history.mean()
+    demand = demand_history
+    historical_dates = demand_history.index.to_numpy()
 
-        results = results[results["Period"] > warm_up_period]
-        total_demand = results["Demand"].sum()
-        total_fulfilled = results["Fulfilled_Demand"].sum()
-        fill_rate = (total_fulfilled / total_demand
-            if total_demand > 0
-            else float("nan"))
-        fill_rate_by_ss[safety_stock_units] += fill_rate / n_simulations
+    fill_rate_by_ss = {ss: 0.0 for ss in safety_stock_range}
 
-        if plot_historical_inventory:
-            fig, ax = plt.subplots(figsize=(12, 6))
+    for sim in range(n_simulations):
+        # The forecast is a noisy estimate of demand - it drives the reorder point / order-up-to
+        # level, while the simulation itself is still driven by actual demand above.
+        forecast_error_std = forecast_error_cov * demand_average
+        forecast = np.maximum(demand + rng.normal(0, forecast_error_std, time).round(), 0)
 
-            for name, df in results.items():
-                x = historical_dates[df["Period"].to_numpy()] if historical_dates is not None else df["Period"]
-                ax.plot(x, df["On_Hand"], label=name, linewidth=2)
+        for safety_stock_units in safety_stock_range:
+            results = simulate_inventory(
+                demand=demand,
+                forecast=forecast,
+                lead_time=average_lead_time,
+                lead_time_std_dev=lead_time_std_dev,
+                initial_on_hand=init_on_hand,
+                safety_stock=safety_stock_units,
+                MOQ=MOQ,
+                Review_Period=review_period,
+                rng=rng)
 
-            ax.set_ylim(bottom=0)
-            ax.set_xlabel("Date" if historical_dates is not None else "Period")
-            ax.set_ylabel("On Hand")
-            ax.grid(alpha=0.5)
-            ax.legend()
+            results = results[results["Period"] > warm_up_period]
+            total_demand = results["Demand"].sum()
+            total_fulfilled = results["Fulfilled_Demand"].sum()
+            fill_rate = (total_fulfilled / total_demand
+                if total_demand > 0
+                else float("nan"))
+            fill_rate_by_ss[safety_stock_units] += fill_rate / n_simulations
 
-            if historical_dates is not None:
+            if plot_historical_inventory:
+                fig, ax = plt.subplots(figsize=(12, 6))
+
+                x = historical_dates[results["Period"].to_numpy()]
+                ax.plot(x, results["On_Hand"], linewidth=2)
+
+                ax.set_ylim(bottom=0)
+                ax.set_xlabel("Date")
+                ax.set_ylabel("On Hand")
+                ax.set_title(f"{site} / {product} - Safety stock {safety_stock_units}")
+                ax.grid(alpha=0.5)
                 fig.autofmt_xdate()
 
-            plt.tight_layout()
-            plt.show()
+                plt.tight_layout()
+                plt.show()
+                plt.close(fig)
 
+    print(f"{site} / {product}:")
+    for safety_stock_units in safety_stock_range:
+        print(f"  {safety_stock_units}: {fill_rate_by_ss[safety_stock_units]:.1%}")
+        output_rows.append({
+            "Site": site,
+            "Product": product,
+            "Safety Stock Units": safety_stock_units,
+            "Fill Rate": fill_rate_by_ss[safety_stock_units]
+        })
+    print("")
 
+    fig_fill_rate, ax_fill_rate = plt.subplots(figsize=(10, 6))
 
-for i, safety_stock_units in enumerate(safety_stock_range):
-    print(f"{safety_stock_units}: {fill_rate_by_ss[safety_stock_units]:.1%}")
-print("")
+    ax_fill_rate.plot(
+        list(safety_stock_range),
+        [fill_rate_by_ss[ss] for ss in safety_stock_range],
+        marker="o",
+        linewidth=2
+    )
 
-x_values = list(safety_stock_range)
-y_values = [fill_rate_by_ss[ss] for ss in x_values]
+    ax_fill_rate.set_xlabel("Safety stock (units)")
+    ax_fill_rate.set_ylabel("Fill rate")
+    ax_fill_rate.set_title(f"Fill rate vs. Safety Stock - {site} / {product}")
+    ax_fill_rate.yaxis.set_major_formatter(PercentFormatter(xmax=1))
+    ax_fill_rate.set_ylim(0, 1.01)
+    ax_fill_rate.grid(alpha=0.5)
 
-fig_fill_rate, ax_fill_rate = plt.subplots(figsize=(10, 6))
+    fig_fill_rate.tight_layout()
+    fig_fill_rate.savefig(
+        f"fill_rate_by_safety_stock_{site}_{product}.png",
+        dpi=300,
+        bbox_inches="tight"
+    )
+    plt.close(fig_fill_rate)
 
-ax_fill_rate.plot(
-    x_values,
-    y_values,
-    marker="o",
-    linewidth=2
-)
-
-ax_fill_rate.set_xlabel("Safety stock (units)")
-ax_fill_rate.set_ylabel("Fill rate")
-ax_fill_rate.set_title("Fill rate vs. Safety Stock")
-ax_fill_rate.yaxis.set_major_formatter(PercentFormatter(xmax=1))
-ax_fill_rate.set_ylim(0, 1.01)
-ax_fill_rate.grid(alpha=0.5)
-
-fig_fill_rate.tight_layout()
-fig_fill_rate.savefig(
-    "fill_rate_by_safety_stock.png",
-    dpi=300,
-    bbox_inches="tight"
-)
-
-plt.show()
+pd.DataFrame(output_rows).to_csv(output_csv, index=False)

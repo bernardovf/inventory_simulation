@@ -28,6 +28,43 @@ def load_historical_demand(path, site, product, site_col="Site", product_col="Pr
 
     return demand_df.set_index(date_col)[quantity_col].astype(float)
 
+def load_site_product_parameters(path):
+    """Load per-Site/Product simulation parameters.
+
+    Expects one row per Site/Product with columns Site, Product, and
+    (case/spacing-insensitive) Forecast Error Cov, Average Lead Time,
+    Std Dev Lead Time, MOQ.
+    """
+    canonical_names = {
+        "site": "Site",
+        "product": "Product",
+        "forecasterrorcov": "Forecast_Error_Cov",
+        "averageleadtime": "Average_Lead_Time",
+        "stddevleadtime": "Lead_Time_Std_Dev",
+        "moq": "MOQ",
+    }
+
+    def normalize(col):
+        return col.strip().lower().replace(" ", "").replace("_", "")
+
+    params_df = pd.read_csv(path)
+    rename_map = {
+        col: canonical_names[normalize(col)]
+        for col in params_df.columns
+        if normalize(col) in canonical_names
+    }
+    params_df = params_df.rename(columns=rename_map)
+
+    required_columns = list(canonical_names.values())
+    missing_columns = [col for col in required_columns if col not in params_df.columns]
+    if missing_columns:
+        raise ValueError(f"Missing expected columns in site/product parameters file: {missing_columns}")
+
+    params_df["Site"] = params_df["Site"].astype(str)
+    params_df["Product"] = params_df["Product"].astype(str)
+
+    return params_df[required_columns]
+
 bad_update_dates = pd.to_datetime([
     "2025-01-20",
     "2025-02-09",

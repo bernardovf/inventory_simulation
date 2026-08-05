@@ -9,7 +9,10 @@ def load_historical_demand(path, site, product, site_col="Site", product_col="Pr
     file treated as zero demand.
     """
     demand_df = pd.read_csv(path)
-    demand_df = demand_df[(demand_df[site_col] == site) & (demand_df[product_col] == product)]
+    demand_df["Site"] = demand_df["Site"].astype(str)
+    demand_df["Product"] = demand_df["Product"].astype(str)
+    demand_df = demand_df[demand_df[site_col] == site]
+    demand_df = demand_df[demand_df[product_col] == product]
 
     if demand_df.empty:
         raise ValueError(f"No rows found for {site_col}={site!r}, {product_col}={product!r}")

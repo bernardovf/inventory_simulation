@@ -138,15 +138,12 @@ rng = np.random.default_rng(42)
 # filter to - in that case only `forecast_error_cov` is needed, since the
 # forecast is generated from the historical demand rather than from
 # `demand_average`.
-historical_demand_csv = None  # e.g. "historical_demand.csv"
-historical_demand_site = None  # e.g. "US10"
-historical_demand_product = None  # e.g. "1001125"
+historical_demand_csv = "historical_demand.csv"  # e.g. "historical_demand.csv"
+historical_demand_site = "US10"  # e.g. "US10"
+historical_demand_product = "1001125"  # e.g. "1001125"
 
 if historical_demand_csv:
-    demand_history = load_historical_demand(
-        historical_demand_csv,
-        site=historical_demand_site,
-        product=historical_demand_product)
+    demand_history = load_historical_demand(historical_demand_csv, site=historical_demand_site, product=historical_demand_product)
     time = len(demand_history)
     demand_average = demand_history.mean()
 else:
@@ -155,16 +152,18 @@ else:
     demand_std_deviation = 75
 
 warm_up_period = 60
-forecast_error_cov = 0.3  # std dev of forecast error, as a fraction of average demand
+forecast_error_cov = 0.32  # std dev of forecast error, as a fraction of average demand
+init_on_hand = 30000
+average_lead_time = 39
+lead_time_std_dev = 1
+MOQ = 18188
+review_period = 7
+plot_historical_inventory = True
 
-init_on_hand = 100
-average_lead_time = 8
-lead_time_std_dev = 2
-MOQ = 500
-review_period = 1
+policies = ["(P,MOQ)"]
+safety_stock_range = range(10000, 60000, 10000)
+safety_stock_range = range(32000, 33000, 10000)
 
-policies = ["(C,MOQ)", "(C,No MOQ)", "(P,MOQ)", "(P,Non MOQ)"]
-safety_stock_range = range(50, 750, 50)
 n_simulations = 20  # Monte Carlo replications to average per (safety_stock, policy)
 
 results = {}
@@ -204,10 +203,30 @@ for sim in range(n_simulations):
             fill_rate_sum[pol][i] += fill_rate
             results[pol] = results_pol
 
+            if plot_historical_inventory:
+                fig, ax = plt.subplots(figsize=(12, 6))
+
+                for name, df in results.items():
+                    ax.plot(
+                        df["Period"],
+                        df["On_Hand"],
+                        label=name,
+                        linewidth=2
+                    )
+
+                ax.set_ylim(bottom=0)
+                ax.set_xlabel("Period")
+                ax.set_ylabel("On Hand")
+                ax.grid(alpha=0.5)
+                ax.legend()
+
+                plt.tight_layout()
+                plt.show()
+            exit()
+
 fill_rate_by_policy = {
     pol: [total / n_simulations for total in fill_rate_sum[pol]]
-    for pol in policies
-}
+    for pol in policies}
 
 for i, safety_stock_units in enumerate(safety_stock_range):
     for pol in policies:

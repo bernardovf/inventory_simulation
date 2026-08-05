@@ -1,17 +1,11 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.ticker import PercentFormatter
 
 from utils import load_historical_demand
 
-def simulate_inventory(demand, forecast, policy, lead_time, initial_on_hand, safety_stock, MOQ=None, Review_Period=None, lead_time_std_dev=0, rng=None):
-    valid_policies = {
-        "(s,Q)",
-        "(R,S)",
-        "(s,S)",
-        "(R,s,S)",
-        "(R,s,Q)"}
-
+def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stock, MOQ=None, Review_Period=None, lead_time_std_dev=0, rng=None):
     if rng is None:
         rng = np.random.default_rng()
 
@@ -75,23 +69,12 @@ def simulate_inventory(demand, forecast, policy, lead_time, initial_on_hand, saf
         reorder_point[t] = s
         order_up_to_level[t] = S
 
-        policies = ["(C,MOQ)", "(C,No MOQ)", "(P,MOQ)", "(P,Non MOQ)"]
-
-        if policy == "(C,MOQ)":
+        if Review_Period == 0:
             if ip <= s:
                 qty = max(MOQ, S - ip)
-
-        elif policy == "(C,No MOQ)":
-            if ip <= s:
-                qty = max(0, S - ip)
-
-        elif policy == "(P,MOQ)":
+        else:
             if t % Review_Period == 0 and ip <= s:
                 qty = max(MOQ, S - ip)
-
-        elif policy == "(P,Non MOQ)":
-            if t % Review_Period == 0 and ip <= s:
-                qty = max(0, S - ip)
 
         order_qty[t] = qty
 
@@ -153,23 +136,23 @@ else:
     demand_std_deviation = 75
     historical_dates = None
 
-warm_up_period = 60
+warm_up_period = 90
 forecast_error_cov = 0.32  # std dev of forecast error, as a fraction of average demand
 init_on_hand = 30000
 average_lead_time = 39
 lead_time_std_dev = 1
 MOQ = 18188
 review_period = 7
-plot_historical_inventory = True
+plot_historical_inventory = False
 
-policies = ["(P,MOQ)"]
-safety_stock_range = range(10000, 60000, 10000)
-safety_stock_range = range(32000, 33000, 10000)
+safety_stock_range = range(10000, 80000, 10000)
 
-n_simulations = 20  # Monte Carlo replications to average per (safety_stock, policy)
+n_simulations = 100  # Monte Carlo replications to average per (safety_stock, policy)
 
 results = {}
-fill_rate_sum = {pol: [0.0] * len(safety_stock_range) for pol in policies}
+fill_rate_by_ss = {}
+for i, safety_stock_units in enumerate(safety_stock_range):
+    fill_rate_by_ss[safety_stock_units] = 0
 
 for sim in range(n_simulations):
     if historical_demand_csv:
@@ -183,107 +166,74 @@ for sim in range(n_simulations):
     forecast = np.maximum(demand + rng.normal(0, forecast_error_std, time).round(), 0)
 
     for i, safety_stock_units in enumerate(safety_stock_range):
-        for pol in policies:
-            results_pol = simulate_inventory(
-                demand=demand,
-                forecast=forecast,
-                policy=pol,
-                lead_time=average_lead_time,
-                lead_time_std_dev=lead_time_std_dev,
-                initial_on_hand=init_on_hand,
-                safety_stock=safety_stock_units,
-                MOQ=MOQ,
-                Review_Period=review_period,
-                rng=rng)
+        results = simulate_inventory(
+            demand=demand,
+            forecast=forecast,
+            lead_time=average_lead_time,
+            lead_time_std_dev=lead_time_std_dev,
+            initial_on_hand=init_on_hand,
+            safety_stock=safety_stock_units,
+            MOQ=MOQ,
+            Review_Period=review_period,
+            rng=rng)
 
-            results_pol = results_pol[results_pol["Period"] > warm_up_period]
-            total_demand = results_pol["Demand"].sum()
-            total_fulfilled = results_pol["Fulfilled_Demand"].sum()
-            fill_rate = (total_fulfilled / total_demand
-                if total_demand > 0
-                else float("nan"))
-            fill_rate_sum[pol][i] += fill_rate
-            results[pol] = results_pol
+        results = results[results["Period"] > warm_up_period]
+        total_demand = results["Demand"].sum()
+        total_fulfilled = results["Fulfilled_Demand"].sum()
+        fill_rate = (total_fulfilled / total_demand
+            if total_demand > 0
+            else float("nan"))
+        fill_rate_by_ss[safety_stock_units] += fill_rate / n_simulations
 
-            if plot_historical_inventory:
-                fig, ax = plt.subplots(figsize=(12, 6))
+        if plot_historical_inventory:
+            fig, ax = plt.subplots(figsize=(12, 6))
 
-                for name, df in results.items():
-                    x = historical_dates[df["Period"].to_numpy()] if historical_dates is not None else df["Period"]
-                    ax.plot(
-                        x,
-                        df["On_Hand"],
-                        label=name,
-                        linewidth=2
-                    )
+            for name, df in results.items():
+                x = historical_dates[df["Period"].to_numpy()] if historical_dates is not None else df["Period"]
+                ax.plot(x, df["On_Hand"], label=name, linewidth=2)
 
-                ax.set_ylim(bottom=0)
-                ax.set_xlabel("Date" if historical_dates is not None else "Period")
-                ax.set_ylabel("On Hand")
-                ax.grid(alpha=0.5)
-                ax.legend()
+            ax.set_ylim(bottom=0)
+            ax.set_xlabel("Date" if historical_dates is not None else "Period")
+            ax.set_ylabel("On Hand")
+            ax.grid(alpha=0.5)
+            ax.legend()
 
-                if historical_dates is not None:
-                    fig.autofmt_xdate()
+            if historical_dates is not None:
+                fig.autofmt_xdate()
 
-                plt.tight_layout()
-                plt.show()
-            exit()
+            plt.tight_layout()
+            plt.show()
 
-fill_rate_by_policy = {
-    pol: [total / n_simulations for total in fill_rate_sum[pol]]
-    for pol in policies}
+
 
 for i, safety_stock_units in enumerate(safety_stock_range):
-    for pol in policies:
-        print(f"{safety_stock_units}, {pol}: {fill_rate_by_policy[pol][i]:.1%}")
-    print("")
+    print(f"{safety_stock_units}: {fill_rate_by_ss[safety_stock_units]:.1%}")
+print("")
+
+x_values = list(safety_stock_range)
+y_values = [fill_rate_by_ss[ss] for ss in x_values]
 
 fig_fill_rate, ax_fill_rate = plt.subplots(figsize=(10, 6))
 
-for pol in policies:
-    ax_fill_rate.plot(list(safety_stock_range), fill_rate_by_policy[pol], marker="o", linewidth=2, label=pol)
+ax_fill_rate.plot(
+    x_values,
+    y_values,
+    marker="o",
+    linewidth=2
+)
 
 ax_fill_rate.set_xlabel("Safety stock (units)")
 ax_fill_rate.set_ylabel("Fill rate")
-ax_fill_rate.set_title("Fill rate vs. safety stock, by policy")
-ax_fill_rate.yaxis.set_major_formatter(lambda y, _: f"{y:.1%}")
+ax_fill_rate.set_title("Fill rate vs. Safety Stock")
+ax_fill_rate.yaxis.set_major_formatter(PercentFormatter(xmax=1))
+ax_fill_rate.set_ylim(0, 1.01)
 ax_fill_rate.grid(alpha=0.5)
-ax_fill_rate.legend()
 
 fig_fill_rate.tight_layout()
-fig_fill_rate.savefig("fill_rate_by_safety_stock.png")
-plt.show()
-
-exit()
-
-
-fig, axes = plt.subplots(2, 2, figsize=(18, 14), sharex=True)
-
-axes = axes.flatten()
-
-for ax, (name, df) in zip(axes, results.items()):
-    ax.plot(df["Period"], df["On_Hand"], linewidth=2)
-    receipt_rows = df["Receipts"] > 0
-    ax.set_ylim(bottom=0)
-    ax.set_title(name)
-    ax.grid(alpha=0.5)
-
-# Hide the unused plots
-for ax in axes[len(results):]:
-    ax.axis("off")
-
-# Single legend for the whole figure
-handles, labels = axes[0].get_legend_handles_labels()
-fig.legend(
-    handles,
-    labels,
-    loc="upper center",
-    ncol=3,
-    bbox_to_anchor=(0.5, 1.0)
+fig_fill_rate.savefig(
+    "fill_rate_by_safety_stock.png",
+    dpi=300,
+    bbox_inches="tight"
 )
 
-fig.supxlabel("Period")
-
-plt.tight_layout(rect=[0, 0, 1, 0.99])
 plt.show()

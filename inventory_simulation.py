@@ -124,7 +124,6 @@ site_product_parameters_csv = "site_product_parameters.csv"
 output_csv = "fill_rate_by_site_product.csv"
 
 warm_up_period = 90
-init_on_hand = 30000
 review_period = 7
 plot_historical_inventory = False
 
@@ -138,13 +137,15 @@ output_rows = []
 for _, param_row in parameters.iterrows():
     site = param_row["Site"]
     product = param_row["Product"]
+    print(site, product)
     forecast_error_cov = param_row["Forecast_Error_Cov"]
     average_lead_time = int(round(param_row["Average_Lead_Time"]))
     lead_time_std_dev = param_row["Lead_Time_Std_Dev"]
     MOQ = param_row["MOQ"]
     ss_settings = param_row["SS_Settings"]
+    init_on_hand = param_row["SS_Settings"]
 
-    safety_stock_range = np.linspace(ss_settings / 2, ss_settings * 2, safety_stock_steps)
+    safety_stock_range = np.linspace(ss_settings / 10, ss_settings * 3, safety_stock_steps)
 
     demand_history = load_historical_demand(historical_demand_csv, site=site, product=product)
     time = len(demand_history)
@@ -197,17 +198,17 @@ for _, param_row in parameters.iterrows():
                 plt.show()
                 plt.close(fig)
 
-    print(f"{site} / {product}:")
+
     for safety_stock_units in safety_stock_range:
-        print(f"  {safety_stock_units}: {fill_rate_by_ss[safety_stock_units]:.1%}")
+        #print(f"  {round(safety_stock_units, 0)}: {fill_rate_by_ss[safety_stock_units]:.1%}")
         output_rows.append({
             "Site": site,
             "Product": product,
-            "Safety Stock Units": safety_stock_units,
+            "Safety Stock Units": round(safety_stock_units, 0),
             "Fill Rate": fill_rate_by_ss[safety_stock_units]
         })
-    print("")
 
+    """
     fig_fill_rate, ax_fill_rate = plt.subplots(figsize=(10, 6))
 
     ax_fill_rate.plot(
@@ -230,6 +231,6 @@ for _, param_row in parameters.iterrows():
         dpi=300,
         bbox_inches="tight"
     )
-    plt.close(fig_fill_rate)
+    plt.close(fig_fill_rate)"""
 
 pd.DataFrame(output_rows).to_csv(output_csv, index=False)

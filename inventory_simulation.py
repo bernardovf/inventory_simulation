@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+from utils import load_historical_demand
+
 def simulate_inventory(demand, forecast, policy, lead_time, initial_on_hand, safety_stock, MOQ=None, Review_Period=None, lead_time_std_dev=0, rng=None):
     valid_policies = {
         "(s,Q)",
@@ -128,10 +130,26 @@ def simulate_inventory(demand, forecast, policy, lead_time, initial_on_hand, saf
 
 rng = np.random.default_rng(42)
 
-time = 500
+# --- Demand source -----------------------------------------------------
+# Leave `historical_demand_csv` as None to simulate with synthetic demand
+# (`demand_average` / `demand_std_deviation` below). To use real demand
+# instead, set it to a CSV path with columns Site, Period, Date, Quantity
+# (and `historical_demand_site` if the file has more than one Site) - in
+# that case only `forecast_error_cov` is needed, since the forecast is
+# generated from the historical demand rather than from `demand_average`.
+historical_demand_csv = None  # e.g. "historical_demand.csv"
+historical_demand_site = None  # required if the CSV has more than one Site
+
+if historical_demand_csv:
+    demand_history = load_historical_demand(historical_demand_csv, site=historical_demand_site)
+    time = len(demand_history)
+    demand_average = demand_history.mean()
+else:
+    time = 500
+    demand_average = 100
+    demand_std_deviation = 75
+
 warm_up_period = 60
-demand_average = 100
-demand_std_deviation = 75
 forecast_error_cov = 0.3  # std dev of forecast error, as a fraction of average demand
 
 init_on_hand = 100
@@ -148,7 +166,10 @@ results = {}
 fill_rate_sum = {pol: [0.0] * len(safety_stock_range) for pol in policies}
 
 for sim in range(n_simulations):
-    demand = np.maximum(rng.normal(demand_average, demand_std_deviation, time).round(), 0)
+    if historical_demand_csv:
+        demand = demand_history
+    else:
+        demand = np.maximum(rng.normal(demand_average, demand_std_deviation, time).round(), 0)
 
     # The forecast is a noisy estimate of demand - it drives the reorder point / order-up-to
     # level, while the simulation itself is still driven by actual demand above.

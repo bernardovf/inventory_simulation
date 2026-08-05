@@ -146,10 +146,12 @@ if historical_demand_csv:
     demand_history = load_historical_demand(historical_demand_csv, site=historical_demand_site, product=historical_demand_product)
     time = len(demand_history)
     demand_average = demand_history.mean()
+    historical_dates = demand_history.index.to_numpy()
 else:
     time = 500
     demand_average = 100
     demand_std_deviation = 75
+    historical_dates = None
 
 warm_up_period = 60
 forecast_error_cov = 0.32  # std dev of forecast error, as a fraction of average demand
@@ -207,18 +209,22 @@ for sim in range(n_simulations):
                 fig, ax = plt.subplots(figsize=(12, 6))
 
                 for name, df in results.items():
+                    x = historical_dates[df["Period"].to_numpy()] if historical_dates is not None else df["Period"]
                     ax.plot(
-                        df["Period"],
+                        x,
                         df["On_Hand"],
                         label=name,
                         linewidth=2
                     )
 
                 ax.set_ylim(bottom=0)
-                ax.set_xlabel("Period")
+                ax.set_xlabel("Date" if historical_dates is not None else "Period")
                 ax.set_ylabel("On Hand")
                 ax.grid(alpha=0.5)
                 ax.legend()
+
+                if historical_dates is not None:
+                    fig.autofmt_xdate()
 
                 plt.tight_layout()
                 plt.show()

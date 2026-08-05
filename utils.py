@@ -3,10 +3,10 @@ import pandas as pd
 def load_historical_demand(path, site, product, site_col="Site", product_col="Product", date_col="Date", quantity_col="Demand"):
     """Load a historical demand CSV (columns: Site, Product, Date, Demand).
 
-    Filters to the given site/product first, then returns a 1-D array of
-    daily demand quantities spanning every day from the earliest to the
-    latest date found for that site/product, with any day missing from the
-    file treated as zero demand.
+    Filters to the given site/product first, then returns a pandas Series of
+    daily demand quantities indexed by Date, spanning every day from the
+    earliest to the latest date found for that site/product, with any day
+    missing from the file treated as zero demand.
     """
     demand_df = pd.read_csv(path)
     demand_df["Site"] = demand_df["Site"].astype(str)
@@ -26,7 +26,7 @@ def load_historical_demand(path, site, product, site_col="Site", product_col="Pr
     demand_df = full_dates.merge(demand_df, on=date_col, how="left")
     demand_df[quantity_col] = demand_df[quantity_col].fillna(0)
 
-    return demand_df[quantity_col].to_numpy(dtype=float)
+    return demand_df.set_index(date_col)[quantity_col].astype(float)
 
 bad_update_dates = pd.to_datetime([
     "2025-01-20",

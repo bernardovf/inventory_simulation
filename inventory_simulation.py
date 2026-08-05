@@ -132,17 +132,17 @@ time = 500
 warm_up_period = 60
 demand_average = 100
 demand_std_deviation = 75
-forecast_error_cov = 0.3  # std dev of forecast error, as a fraction of average demand
+forecast_error_cov = 1.0  # std dev of forecast error, as a fraction of average demand
 
 init_on_hand = 100
 average_lead_time = 8
-lead_time_std_dev = 2
+lead_time_std_dev = 4
 MOQ = 500
-review_period = 1
+review_period = 7
 
 policies = ["(C,MOQ)", "(C,No MOQ)", "(P,MOQ)", "(P,Non MOQ)"]
-safety_stock_range = range(50, 750, 50)
-n_simulations = 20  # Monte Carlo replications to average per (safety_stock, policy)
+safety_stock_range = range(0, 1000, 100)
+n_simulations = 100  # Monte Carlo replications to average per (safety_stock, policy)
 
 results = {}
 fill_rate_sum = {pol: [0.0] * len(safety_stock_range) for pol in policies}

@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 
 def load_historical_demand(path, site, product, site_col="Site", product_col="Product", date_col="Date", quantity_col="Demand"):
@@ -27,6 +28,73 @@ def load_historical_demand(path, site, product, site_col="Site", product_col="Pr
     demand_df[quantity_col] = demand_df[quantity_col].fillna(0)
 
     return demand_df.set_index(date_col)[quantity_col].astype(float)
+
+def load_forecast_vintages(path, site, product, site_col="Site", product_col="Product", date_col="Date", as_of_col="as_of_dt", forecast_col="Forecast"):
+    """Load a forecast-vintages CSV (columns: Site, Product, Date, as_of_dt, Forecast).
+
+    Each row is the forecast for `Date`, as it was generated on `as_of_dt` -
+    the same target date typically appears many times, once per vintage that
+    forecast it. Filters to the given site/product and returns a dict mapping
+    each as_of_dt (Timestamp) to a pandas Series of forecasted quantity
+    indexed by target Date, so a simulation standing "as of" a given day can
+    look up the forecast that would actually have been available on that day,
+    instead of one that peeks into the future.
+    """
+    forecast_df = pd.read_csv(path)
+    forecast_df[site_col] = forecast_df[site_col].astype(str)
+    forecast_df[product_col] = forecast_df[product_col].astype(str)
+    forecast_df = forecast_df[forecast_df[site_col] == site]
+    forecast_df = forecast_df[forecast_df[product_col] == product]
+
+    if forecast_df.empty:
+        raise ValueError(f"No forecast rows found for {site_col}={site!r}, {product_col}={product!r}")
+
+    forecast_df[date_col] = pd.to_datetime(forecast_df[date_col])
+    forecast_df[as_of_col] = pd.to_datetime(forecast_df[as_of_col])
+
+    vintages = {}
+    for as_of_dt, group in forecast_df.groupby(as_of_col):
+        vintages[as_of_dt] = group.set_index(date_col)[forecast_col].astype(float).sort_index()
+
+    return vintages
+
+def forecast_windows_from_vintages(vintages, dates, lead_time, review_period):
+    """For each date, sum the forecast that would have been available "as of"
+    that day over the upcoming lead-time / lead-time-plus-review-period
+    windows - the real-forecast counterpart to the coefficient-of-variation
+    synthetic forecast.
+
+    For each date, uses the most recent vintage (as_of_dt) on or before that
+    date; dates earlier than the first available vintage fall back to that
+    earliest vintage rather than peeking into a forecast from the future. If
+    a vintage doesn't extend far enough forward to cover the full window,
+    the missing days are filled with that vintage's own average forecasted
+    value.
+
+    Returns two numpy arrays aligned to `dates`: (forecast_lead_time_sums,
+    forecast_protection_period_sums).
+    """
+    as_of_dates = np.array(sorted(vintages.keys()))
+    dates = pd.to_datetime(pd.Index(dates))
+
+    lead_time_sums = np.zeros(len(dates))
+    protection_period_sums = np.zeros(len(dates))
+
+    for i, current_date in enumerate(dates):
+        idx = np.searchsorted(as_of_dates, current_date, side="right") - 1
+        idx = max(idx, 0)
+        vintage = vintages[as_of_dates[idx]]
+
+        horizon_end = current_date + pd.Timedelta(days=lead_time + review_period)
+        window = vintage[(vintage.index > current_date) & (vintage.index <= horizon_end)]
+        avg_daily = window.mean() if len(window) > 0 else 0.0
+
+        lead_time_end = current_date + pd.Timedelta(days=lead_time)
+        lead_time_window = window[window.index <= lead_time_end]
+        lead_time_sums[i] = lead_time_window.sum() + max(lead_time - len(lead_time_window), 0) * avg_daily
+        protection_period_sums[i] = window.sum() + max((lead_time + review_period) - len(window), 0) * avg_daily
+
+    return lead_time_sums, protection_period_sums
 
 def load_site_product_parameters(path):
     """Load per-Site/Product simulation parameters.

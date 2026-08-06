@@ -5,15 +5,23 @@ from matplotlib.ticker import PercentFormatter
 
 plot_historical_inventory = False
 
-from utils import load_historical_demand, load_site_product_parameters
+from utils import load_historical_demand, load_site_product_parameters, load_forecast_vintages, forecast_windows_from_vintages
 
-def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stock, MOQ=None, Review_Period=None, lead_time_std_dev=0, rng=None):
+def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stock, MOQ=None, Review_Period=None, lead_time_std_dev=0, rng=None, forecast_lead_time_series=None, forecast_protection_period_series=None):
     if rng is None:
         rng = np.random.default_rng()
 
     demand = np.asarray(demand, dtype=float)
     forecast = np.asarray(forecast, dtype=float)
     periods = len(demand)
+
+    # A real forecast (one lead-time/protection-period sum per day, looked up
+    # from what was actually known "as of" that day) takes priority over the
+    # coefficient-of-variation synthetic forecast below when supplied.
+    using_real_forecast = forecast_lead_time_series is not None
+    if using_real_forecast:
+        forecast_lead_time_series = np.asarray(forecast_lead_time_series, dtype=float)
+        forecast_protection_period_series = np.asarray(forecast_protection_period_series, dtype=float)
 
     # Extra space is needed for orders arriving after the simulation horizon;
     # padded generously so a long random lead time doesn't fall off the end.
@@ -60,9 +68,13 @@ def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stoc
 
         # Demand over the upcoming lead time / protection period, taken from the
         # forecast (not the actual future demand, which wouldn't be known yet).
-        future_forecast = forecast[t + 1:]
-        forecast_lead_time = future_forecast[:lead_time].sum()
-        forecast_protection_period = future_forecast[:lead_time + Review_Period].sum()
+        if using_real_forecast:
+            forecast_lead_time = forecast_lead_time_series[t]
+            forecast_protection_period = forecast_protection_period_series[t]
+        else:
+            future_forecast = forecast[t + 1:]
+            forecast_lead_time = future_forecast[:lead_time].sum()
+            forecast_protection_period = future_forecast[:lead_time + Review_Period].sum()
 
         s = forecast_lead_time + safety_stock
         S = forecast_protection_period + safety_stock
@@ -112,7 +124,7 @@ def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stoc
 
     return results
 
-def simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simulations, parameters):
+def simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simulations, parameters, forecast_vintages_csv=None):
     output_rows = []
 
     for _, param_row in parameters.iterrows():
@@ -134,11 +146,26 @@ def simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simu
         demand = demand_history
         historical_dates = demand_history.index.to_numpy()
 
+        # Real forecast: use the forecast vintage that would actually have been
+        # available on each historical day, instead of implying it from demand
+        # plus a coefficient-of-variation noise term. Computed once per item
+        # since it doesn't depend on the Monte Carlo replication or safety stock.
+        if forecast_vintages_csv is not None:
+            vintages = load_forecast_vintages(forecast_vintages_csv, site=site, product=product)
+            forecast_lead_time_series, forecast_protection_period_series = forecast_windows_from_vintages(
+                vintages, demand_history.index, average_lead_time, review_period)
+        else:
+            forecast_lead_time_series = None
+            forecast_protection_period_series = None
+
         fill_rate_by_ss = {ss: 0.0 for ss in safety_stock_range}
 
         for sim in range(n_simulations):
-            forecast_error_std = forecast_error_cov * demand_average
-            forecast = np.maximum(demand + rng.normal(0, forecast_error_std, time).round(), 0)
+            if forecast_vintages_csv is None:
+                forecast_error_std = forecast_error_cov * demand_average
+                forecast = np.maximum(demand + rng.normal(0, forecast_error_std, time).round(), 0)
+            else:
+                forecast = np.full(time, np.nan)  # not used for s/S here; real forecast doesn't reduce to one series
 
             for safety_stock_units in safety_stock_range:
                 results = simulate_inventory(
@@ -150,7 +177,9 @@ def simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simu
                     safety_stock=safety_stock_units,
                     MOQ=MOQ,
                     Review_Period=review_period,
-                    rng=rng)
+                    rng=rng,
+                    forecast_lead_time_series=forecast_lead_time_series,
+                    forecast_protection_period_series=forecast_protection_period_series)
 
                 results = results[results["Period"] > warm_up_period]
                 total_demand = results["Demand"].sum()
@@ -187,7 +216,7 @@ def simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simu
 
     return pd.DataFrame(output_rows)
 
-def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, safety_stock_units, parameters):
+def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, safety_stock_units, parameters, forecast_vintages_csv=None):
     for _, param_row in parameters.iterrows():
         if param_row["Site"] == site_chosen and param_row["Product"] == product_chosen:
             site = param_row["Site"]
@@ -206,8 +235,16 @@ def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, s
             demand = demand_history
             historical_dates = demand_history.index.to_numpy()
 
-            forecast_error_std = forecast_error_cov * demand_average
-            forecast = np.maximum(demand + rng.normal(0, forecast_error_std, time).round(), 0)
+            if forecast_vintages_csv is None:
+                forecast_error_std = forecast_error_cov * demand_average
+                forecast = np.maximum(demand + rng.normal(0, forecast_error_std, time).round(), 0)
+                forecast_lead_time_series = None
+                forecast_protection_period_series = None
+            else:
+                vintages = load_forecast_vintages(forecast_vintages_csv, site=site, product=product)
+                forecast_lead_time_series, forecast_protection_period_series = forecast_windows_from_vintages(
+                    vintages, demand_history.index, average_lead_time, review_period)
+                forecast = np.full(time, np.nan)  # not used for s/S here; real forecast doesn't reduce to one series
 
             results = simulate_inventory(
                 demand=demand,
@@ -218,7 +255,9 @@ def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, s
                 safety_stock=safety_stock_units,
                 MOQ=MOQ,
                 Review_Period=review_period,
-                rng=rng)
+                rng=rng,
+                forecast_lead_time_series=forecast_lead_time_series,
+                forecast_protection_period_series=forecast_protection_period_series)
 
             results = results[results["Period"] > warm_up_period]
             total_demand = results["Demand"].sum()
@@ -249,6 +288,7 @@ rng = np.random.default_rng(42)
 
 historical_demand_csv = "historical_demand.csv"
 site_product_parameters_csv = "site_product_parameters.csv"
+forecast_vintages_csv = "forecast_vintages.csv"  # columns: Site, Product, Date, as_of_dt, Forecast; set to None to use the Forecast_Error_Cov synthetic forecast instead
 output_csv = "fill_rate_by_site_product.csv"
 
 warm_up_period = 30
@@ -257,7 +297,7 @@ safety_stock_steps = 20  # number of safety stock levels to simulate, from SS Se
 n_simulations = 100  # Monte Carlo replications to average per (safety_stock, policy)
 parameters = load_site_product_parameters(site_product_parameters_csv)
 
-#output_df = simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simulations, parameters)
-output_df = simulate_combo("USW1", "5071379", warm_up_period, review_period, 6894, parameters)
+#output_df = simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simulations, parameters, forecast_vintages_csv=forecast_vintages_csv)
+output_df = simulate_combo("USW1", "5071379", warm_up_period, review_period, 6894, parameters, forecast_vintages_csv=forecast_vintages_csv)
 
 #output_df.to_csv(output_csv, index=False)

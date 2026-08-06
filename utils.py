@@ -58,30 +58,35 @@ def load_forecast_vintages(path, site, product, site_col="Site", product_col="Pr
 
     return vintages
 
-def forecast_windows_from_vintages(vintages, dates, lead_time, review_period):
+def forecast_windows_from_vintages(vintages, dates, lead_time, review_period, forecast_lag=0):
     """For each date, sum the forecast that would have been available "as of"
     that day over the upcoming lead-time / lead-time-plus-review-period
     windows - the real-forecast counterpart to the coefficient-of-variation
     synthetic forecast.
 
-    For each date, uses the most recent vintage (as_of_dt) on or before that
-    date; dates earlier than the first available vintage fall back to that
-    earliest vintage rather than peeking into a forecast from the future. If
-    a vintage doesn't extend far enough forward to cover the full window,
-    the missing days are filled with that vintage's own average forecasted
-    value.
+    For each date, uses the most recent vintage (as_of_dt) on or before
+    (date - forecast_lag) - i.e. the freshest forecast actually usable that
+    day once `forecast_lag` days of delay (production freeze, review cycle,
+    pipeline latency, ...) between generating a forecast and being able to
+    act on it are accounted for. forecast_lag=0 (the default) uses the
+    freshest vintage available with no delay. Dates earlier than the first
+    usable vintage fall back to that earliest vintage rather than peeking
+    into a forecast from the future. If a vintage doesn't extend far enough
+    forward to cover the full window, the missing days are filled with that
+    vintage's own average forecasted value.
 
     Returns two numpy arrays aligned to `dates`: (forecast_lead_time_sums,
     forecast_protection_period_sums).
     """
     as_of_dates = np.array(sorted(vintages.keys()))
     dates = pd.to_datetime(pd.Index(dates))
+    lag = pd.Timedelta(days=forecast_lag)
 
     lead_time_sums = np.zeros(len(dates))
     protection_period_sums = np.zeros(len(dates))
 
     for i, current_date in enumerate(dates):
-        idx = np.searchsorted(as_of_dates, current_date, side="right") - 1
+        idx = np.searchsorted(as_of_dates, current_date - lag, side="right") - 1
         idx = max(idx, 0)
         vintage = vintages[as_of_dates[idx]]
 
@@ -96,20 +101,25 @@ def forecast_windows_from_vintages(vintages, dates, lead_time, review_period):
 
     return lead_time_sums, protection_period_sums
 
-def latest_forecast_by_date(vintages):
-    """For each target date, the most recent forecast made for it - i.e. the
-    last prediction available before that date's actual demand happened.
+def latest_forecast_by_date(vintages, forecast_lag=0):
+    """For each target date, the most recent forecast that was actually
+    usable by then - i.e. the last prediction available before that date's
+    actual demand happened, once `forecast_lag` days of delay between
+    generating a forecast and being able to act on it are accounted for.
 
-    Only vintages with as_of_dt <= Date are considered (a forecast made
-    after the fact doesn't count as a prediction). Returns a pandas Series
-    of forecasted quantity indexed by Date.
+    Only vintages with as_of_dt <= Date - forecast_lag are considered (a
+    forecast that isn't usable until after the fact doesn't count as a
+    prediction). forecast_lag=0 (the default) uses the freshest forecast
+    available with no delay. Returns a pandas Series of forecasted quantity
+    indexed by Date.
     """
+    lag = pd.Timedelta(days=forecast_lag)
     frames = [
         pd.DataFrame({"Date": series.index, "as_of_dt": as_of_dt, "Forecast": series.to_numpy()})
         for as_of_dt, series in vintages.items()
     ]
     long_df = pd.concat(frames, ignore_index=True)
-    long_df = long_df[long_df["as_of_dt"] <= long_df["Date"]]
+    long_df = long_df[long_df["as_of_dt"] <= long_df["Date"] - lag]
 
     latest_idx = long_df.groupby("Date")["as_of_dt"].idxmax()
     return long_df.loc[latest_idx].set_index("Date")["Forecast"].sort_index()

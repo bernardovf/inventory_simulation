@@ -124,7 +124,7 @@ def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stoc
 
     return results
 
-def simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simulations, parameters, forecast_vintages_csv=None):
+def simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simulations, parameters, forecast_vintages_csv=None, forecast_lag=0):
     output_rows = []
 
     for _, param_row in parameters.iterrows():
@@ -153,7 +153,7 @@ def simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simu
         if forecast_vintages_csv is not None:
             vintages = load_forecast_vintages(forecast_vintages_csv, site=site, product=product)
             forecast_lead_time_series, forecast_protection_period_series = forecast_windows_from_vintages(
-                vintages, demand_history.index, average_lead_time, review_period)
+                vintages, demand_history.index, average_lead_time, review_period, forecast_lag=forecast_lag)
         else:
             forecast_lead_time_series = None
             forecast_protection_period_series = None
@@ -216,7 +216,7 @@ def simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simu
 
     return pd.DataFrame(output_rows)
 
-def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, safety_stock_units, parameters, forecast_vintages_csv=None):
+def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, safety_stock_units, parameters, forecast_vintages_csv=None, forecast_lag=0):
     for _, param_row in parameters.iterrows():
         if param_row["Site"] == site_chosen and param_row["Product"] == product_chosen:
             site = param_row["Site"]
@@ -243,10 +243,10 @@ def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, s
             else:
                 vintages = load_forecast_vintages(forecast_vintages_csv, site=site, product=product)
                 forecast_lead_time_series, forecast_protection_period_series = forecast_windows_from_vintages(
-                    vintages, demand_history.index, average_lead_time, review_period)
+                    vintages, demand_history.index, average_lead_time, review_period, forecast_lag=forecast_lag)
                 forecast = np.full(time, np.nan)  # not used for s/S here; real forecast doesn't reduce to one series
 
-                predicted_demand = latest_forecast_by_date(vintages)
+                predicted_demand = latest_forecast_by_date(vintages, forecast_lag=forecast_lag)
                 actual_vs_predicted = pd.DataFrame({"Actual_Demand": demand_history})
                 actual_vs_predicted["Predicted_Demand"] = predicted_demand.reindex(actual_vs_predicted.index)
                 actual_vs_predicted.to_csv(f"actual_vs_predicted_demand_{site}_{product}.csv")
@@ -300,9 +300,10 @@ warm_up_period = 30
 review_period = 7
 safety_stock_steps = 20  # number of safety stock levels to simulate, from SS Settings / 2 to SS Settings * 2
 n_simulations = 100  # Monte Carlo replications to average per (safety_stock, policy)
+forecast_lag = 30  # days between a forecast being generated and being usable/actionable; 0 = use the freshest vintage available
 parameters = load_site_product_parameters(site_product_parameters_csv)
 
-#output_df = simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simulations, parameters, forecast_vintages_csv=forecast_vintages_csv)
-output_df = simulate_combo("USW1", "5071379", warm_up_period, review_period, 6894, parameters, forecast_vintages_csv=forecast_vintages_csv)
+#output_df = simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simulations, parameters, forecast_vintages_csv=forecast_vintages_csv, forecast_lag=forecast_lag)
+output_df = simulate_combo("USW1", "5071379", warm_up_period, review_period, 6894, parameters, forecast_vintages_csv=forecast_vintages_csv, forecast_lag=forecast_lag)
 
 #output_df.to_csv(output_csv, index=False)

@@ -5,7 +5,7 @@ from matplotlib.ticker import PercentFormatter
 
 plot_historical_inventory = False
 
-from utils import load_historical_demand, load_site_product_parameters, load_forecast_vintages, forecast_windows_from_vintages
+from utils import load_historical_demand, load_site_product_parameters, load_forecast_vintages, forecast_windows_from_vintages, latest_forecast_by_date
 
 def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stock, MOQ=None, Review_Period=None, lead_time_std_dev=0, rng=None, forecast_lead_time_series=None, forecast_protection_period_series=None):
     if rng is None:
@@ -245,6 +245,11 @@ def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, s
                 forecast_lead_time_series, forecast_protection_period_series = forecast_windows_from_vintages(
                     vintages, demand_history.index, average_lead_time, review_period)
                 forecast = np.full(time, np.nan)  # not used for s/S here; real forecast doesn't reduce to one series
+
+                predicted_demand = latest_forecast_by_date(vintages)
+                actual_vs_predicted = pd.DataFrame({"Actual_Demand": demand_history})
+                actual_vs_predicted["Predicted_Demand"] = predicted_demand.reindex(actual_vs_predicted.index)
+                actual_vs_predicted.to_csv(f"actual_vs_predicted_demand_{site}_{product}.csv")
 
             results = simulate_inventory(
                 demand=demand,

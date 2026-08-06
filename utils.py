@@ -96,6 +96,24 @@ def forecast_windows_from_vintages(vintages, dates, lead_time, review_period):
 
     return lead_time_sums, protection_period_sums
 
+def latest_forecast_by_date(vintages):
+    """For each target date, the most recent forecast made for it - i.e. the
+    last prediction available before that date's actual demand happened.
+
+    Only vintages with as_of_dt <= Date are considered (a forecast made
+    after the fact doesn't count as a prediction). Returns a pandas Series
+    of forecasted quantity indexed by Date.
+    """
+    frames = [
+        pd.DataFrame({"Date": series.index, "as_of_dt": as_of_dt, "Forecast": series.to_numpy()})
+        for as_of_dt, series in vintages.items()
+    ]
+    long_df = pd.concat(frames, ignore_index=True)
+    long_df = long_df[long_df["as_of_dt"] <= long_df["Date"]]
+
+    latest_idx = long_df.groupby("Date")["as_of_dt"].idxmax()
+    return long_df.loc[latest_idx].set_index("Date")["Forecast"].sort_index()
+
 def load_site_product_parameters(path):
     """Load per-Site/Product simulation parameters.
 

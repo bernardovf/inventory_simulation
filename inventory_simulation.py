@@ -33,7 +33,6 @@ def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stoc
     realized_lead_time = np.zeros(periods)
 
     for t in range(periods):
-
         # 1. Receive orders due today
         receipts[t] = scheduled_receipts[t]
 
@@ -201,15 +200,11 @@ def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, s
             ss_settings = param_row["SS_Settings"]
             init_on_hand = param_row["SS_Settings"]
 
-            safety_stock_range = np.linspace(ss_settings / 10, ss_settings * 3, safety_stock_steps)
-
             demand_history = load_historical_demand(historical_demand_csv, site=site, product=product)
             time = len(demand_history)
             demand_average = demand_history.mean()
             demand = demand_history
             historical_dates = demand_history.index.to_numpy()
-
-            fill_rate_by_ss = {ss: 0.0 for ss in safety_stock_range}
 
             forecast_error_std = forecast_error_cov * demand_average
             forecast = np.maximum(demand + rng.normal(0, forecast_error_std, time).round(), 0)

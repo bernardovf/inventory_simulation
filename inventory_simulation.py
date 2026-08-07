@@ -216,11 +216,13 @@ def simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simu
 
     return pd.DataFrame(output_rows)
 
-def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, safety_stock_units, parameters, forecast_vintages_csv=None, forecast_lag=0):
+def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, safety_stock_units, historical_inventory, parameters, forecast_vintages_csv=None, forecast_lag=0):
     for _, param_row in parameters.iterrows():
         if param_row["Site"] == site_chosen and param_row["Product"] == product_chosen:
             site = param_row["Site"]
             product = param_row["Product"]
+            historical_inventory = historical_inventory[historical_inventory["plant_code"] == site]
+            historical_inventory = historical_inventory[historical_inventory["material_number"] == product]
             print(site, product)
             forecast_error_cov = param_row["Forecast_Error_Cov"]
             average_lead_time = int(round(param_row["Average_Lead_Time"]))
@@ -265,45 +267,94 @@ def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, s
                 forecast_protection_period_series=forecast_protection_period_series)
 
             results = results[results["Period"] > warm_up_period]
+
+            # Add Date to results based on Period
+            results["Date"] = historical_dates[results["Period"].to_numpy()]
+
+            results["Date"] = pd.to_datetime(results["Date"])
+            historical_inventory["Date"] = pd.to_datetime(historical_inventory["Date"])
+
+            # Merge historical inventory
+            results = results.merge(
+                historical_inventory[["Date", "actual_inventory"]],
+                on="Date",
+                how="inner"
+            )
+
+            results["actual_inventory"] = results["actual_inventory"].fillna(0)
+
+            # Fill rate
             total_demand = results["Demand"].sum()
             total_fulfilled = results["Fulfilled_Demand"].sum()
-            fill_rate = (total_fulfilled / total_demand
-                         if total_demand > 0
-                         else float("nan"))
+
+            fill_rate = (
+                total_fulfilled / total_demand
+                if total_demand > 0
+                else float("nan")
+            )
+
             print(fill_rate)
 
+            # Plot
             fig, ax = plt.subplots(figsize=(12, 6))
 
-            x = historical_dates[results["Period"].to_numpy()]
-            ax.plot(x, results["On_Hand"], linewidth=2)
+            ax.plot(
+                results["Date"],
+                results["On_Hand"],
+                linewidth=2,
+                label="Simulated Inventory"
+            )
+
+            ax.plot(
+                results["Date"],
+                results["actual_inventory"],
+                linewidth=2,
+                label="Actual Inventory"
+            )
 
             ax.set_ylim(bottom=0)
             ax.set_xlabel("Date")
             ax.set_ylabel("On Hand")
-            ax.set_title(f"{site} / {product} - Safety stock {safety_stock_units}")
+            ax.set_title(
+                f"{site} / {product} - Safety stock {safety_stock_units}"
+            )
+
             ax.grid(alpha=0.5)
+            ax.legend()
+
             fig.autofmt_xdate()
 
             plt.tight_layout()
             plt.show()
             plt.close(fig)
 
-
 rng = np.random.default_rng(42)
 
-historical_demand_csv = "historical_demand.csv"
-site_product_parameters_csv = "site_product_parameters.csv"
-forecast_vintages_csv = "forecast_vintages.csv"  # columns: Site, Product, Date, as_of_dt, Forecast; set to None to use the Forecast_Error_Cov synthetic forecast instead
-output_csv = "fill_rate_by_site_product.csv"
+historical_demand_csv = "Finished Goods US/historical_demand.csv"
+site_product_parameters_csv = "Finished Goods US/site_product_parameters.csv"
+forecast_vintages_csv = "Finished Goods US/historical_forecast.csv"  # columns: Site, Product, Date, as_of_dt, Forecast; set to None to use the Forecast_Error_Cov synthetic forecast instead
+output_csv = "Finished Goods US/fill_rate_by_site_product.csv"
+historical_inventory = pd.read_csv("Finished Goods US/historical_inventory.csv")
+historical_inventory = historical_inventory[["plant_code", "material_number", "calendar_date", "total_unrestricted_stock"]]
+historical_inventory = historical_inventory.rename(columns={"calendar_date": "Date"})
+historical_inventory = historical_inventory.rename(columns={"total_unrestricted_stock": "actual_inventory"})
 
-warm_up_period = 30
+warm_up_period = 90
 review_period = 7
 safety_stock_steps = 20  # number of safety stock levels to simulate, from SS Settings / 2 to SS Settings * 2
 n_simulations = 100  # Monte Carlo replications to average per (safety_stock, policy)
-forecast_lag = 30  # days between a forecast being generated and being usable/actionable; 0 = use the freshest vintage available
+forecast_lag = 0  # days between a forecast being generated and being usable/actionable; 0 = use the freshest vintage available
 parameters = load_site_product_parameters(site_product_parameters_csv)
 
 #output_df = simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simulations, parameters, forecast_vintages_csv=forecast_vintages_csv, forecast_lag=forecast_lag)
-output_df = simulate_combo("USW1", "5071379", warm_up_period, review_period, 6894, parameters, forecast_vintages_csv=forecast_vintages_csv, forecast_lag=forecast_lag)
+output_df = simulate_combo("USV3",
+                           "10131015",
+                           warm_up_period,
+                           review_period,
+                           100000,
+                           historical_inventory,
+                           parameters,
+                           forecast_vintages_csv=forecast_vintages_csv,
+                           forecast_lag=forecast_lag)
 
 #output_df.to_csv(output_csv, index=False)

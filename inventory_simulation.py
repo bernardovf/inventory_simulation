@@ -232,6 +232,7 @@ def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, s
             init_on_hand = param_row["SS_Settings"]
 
             demand_history = load_historical_demand(historical_demand_csv, site=site, product=product)
+
             time = len(demand_history)
             demand_average = demand_history.mean()
             demand = demand_history
@@ -281,6 +282,7 @@ def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, s
                 how="inner"
             )
 
+
             results["actual_inventory"] = results["actual_inventory"].fillna(0)
 
             # Fill rate
@@ -305,12 +307,12 @@ def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, s
                 label="Simulated Inventory"
             )
 
-            ax.plot(
+            """ax.plot(
                 results["Date"],
                 results["actual_inventory"],
                 linewidth=2,
                 label="Actual Inventory"
-            )
+            )"""
 
             ax.set_ylim(bottom=0)
             ax.set_xlabel("Date")
@@ -330,11 +332,11 @@ def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, s
 
 rng = np.random.default_rng(42)
 
-historical_demand_csv = "Finished Goods US/historical_demand.csv"
-site_product_parameters_csv = "Finished Goods US/site_product_parameters.csv"
-forecast_vintages_csv = "Finished Goods US/historical_forecast.csv"  # columns: Site, Product, Date, as_of_dt, Forecast; set to None to use the Forecast_Error_Cov synthetic forecast instead
-output_csv = "Finished Goods US/fill_rate_by_site_product.csv"
-historical_inventory = pd.read_csv("Finished Goods US/historical_inventory.csv")
+historical_demand_csv = "Test/historical_demand.csv"
+site_product_parameters_csv = "Test/site_product_parameters.csv"
+forecast_vintages_csv = "Test/historical_forecast.csv"  # columns: Site, Product, Date, as_of_dt, Forecast; set to None to use the Forecast_Error_Cov synthetic forecast instead
+output_csv = "Test/fill_rate_by_site_product.csv"
+historical_inventory = pd.read_csv("Test/historical_inventory.csv")
 historical_inventory = historical_inventory[["plant_code", "material_number", "calendar_date", "total_unrestricted_stock"]]
 historical_inventory = historical_inventory.rename(columns={"calendar_date": "Date"})
 historical_inventory = historical_inventory.rename(columns={"total_unrestricted_stock": "actual_inventory"})
@@ -346,11 +348,11 @@ n_simulations = 100  # Monte Carlo replications to average per (safety_stock, po
 parameters = load_site_product_parameters(site_product_parameters_csv)
 
 #output_df = simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simulations, parameters, forecast_vintages_csv=forecast_vintages_csv)
-output_df = simulate_combo("USV3",
-                           "10131015",
+output_df = simulate_combo("DC",
+                           "Product",
                            warm_up_period,
                            review_period,
-                           100000,
+                           100,
                            historical_inventory,
                            parameters,
                            forecast_vintages_csv=forecast_vintages_csv)

@@ -7,7 +7,7 @@ plot_historical_inventory = False
 
 from utils import load_historical_demand, load_site_product_parameters, load_forecast_vintages, forecast_windows_from_vintages, latest_forecast_by_date
 
-def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stock, MOQ=None, Review_Period=None, lead_time_std_dev=0, rng=None, forecast_lead_time_series=None, forecast_protection_period_series=None):
+def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stock, MOQ=None, Review_Period=None, lead_time_std_dev=0, rng=None, forecast_lead_time_series=None, forecast_protection_period_series=None, safety_stock_in_days=False):
     if rng is None:
         rng = np.random.default_rng()
 
@@ -39,6 +39,7 @@ def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stoc
     reorder_point = np.zeros(periods)
     order_up_to_level = np.zeros(periods)
     realized_lead_time = np.zeros(periods)
+    safety_stock_units_series = np.zeros(periods)
 
     for t in range(periods):
         # 1. Receive orders due today
@@ -76,11 +77,18 @@ def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stoc
             forecast_lead_time = future_forecast[:lead_time].sum()
             forecast_protection_period = future_forecast[:lead_time + Review_Period].sum()
 
-        s = forecast_lead_time + safety_stock
-        S = forecast_protection_period + safety_stock
+        if safety_stock_in_days:
+            avg_daily_forecast = forecast_lead_time / lead_time if lead_time > 0 else 0.0
+            safety_stock_qty = safety_stock * avg_daily_forecast
+        else:
+            safety_stock_qty = safety_stock
+
+        s = forecast_lead_time + safety_stock_qty
+        S = forecast_protection_period + safety_stock_qty
 
         reorder_point[t] = s
         order_up_to_level[t] = S
+        safety_stock_units_series[t] = safety_stock_qty
 
         if Review_Period == 0:
             if ip <= s:
@@ -116,6 +124,7 @@ def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stoc
         "On_Hand": on_hand,
         "Order_Qty": order_qty,
         "Lead_Time": realized_lead_time,
+        "Safety_Stock_Units": safety_stock_units_series,
         "Reorder_Point": reorder_point,
         "Order_Up_To_Level": order_up_to_level,
         "Inventory_Position_Before_Order": inventory_position_before_order,
@@ -124,7 +133,7 @@ def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stoc
 
     return results
 
-def simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simulations, parameters, forecast_vintages_csv=None):
+def simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simulations, parameters, forecast_vintages_csv=None, safety_stock_in_days=False):
     output_rows = []
 
     for _, param_row in parameters.iterrows():
@@ -179,7 +188,8 @@ def simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simu
                     Review_Period=review_period,
                     rng=rng,
                     forecast_lead_time_series=forecast_lead_time_series,
-                    forecast_protection_period_series=forecast_protection_period_series)
+                    forecast_protection_period_series=forecast_protection_period_series,
+                    safety_stock_in_days=safety_stock_in_days)
 
                 results = results[results["Period"] > warm_up_period]
                 total_demand = results["Demand"].sum()
@@ -216,7 +226,7 @@ def simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simu
 
     return pd.DataFrame(output_rows)
 
-def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, safety_stock_units, historical_inventory, parameters, forecast_vintages_csv=None):
+def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, safety_stock_units, historical_inventory, parameters, forecast_vintages_csv=None, safety_stock_in_days=False):
     for _, param_row in parameters.iterrows():
         if param_row["Site"] == site_chosen and param_row["Product"] == product_chosen:
             site = param_row["Site"]
@@ -265,7 +275,8 @@ def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, s
                 Review_Period=review_period,
                 rng=rng,
                 forecast_lead_time_series=forecast_lead_time_series,
-                forecast_protection_period_series=forecast_protection_period_series)
+                forecast_protection_period_series=forecast_protection_period_series,
+                safety_stock_in_days=safety_stock_in_days)
 
             results = results[results["Period"] > warm_up_period]
 
@@ -345,9 +356,10 @@ warm_up_period = 90
 review_period = 7
 safety_stock_steps = 20  # number of safety stock levels to simulate, from SS Settings / 2 to SS Settings * 2
 n_simulations = 100  # Monte Carlo replications to average per (safety_stock, policy)
+safety_stock_in_days = False  # if True, safety_stock/SS_Settings/safety_stock_range are read as days of forecasted demand and converted to units each period using that period's own forecast, instead of being a fixed unit quantity. NOTE: init_on_hand below still reuses SS_Settings as a units quantity - if you turn this on for simulate_all_items/simulate_combo, make sure SS_Settings (or whatever you pass as safety_stock_units) is genuinely meant as units for that purpose, or supply a separate units-based starting inventory.
 parameters = load_site_product_parameters(site_product_parameters_csv)
 
-#output_df = simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simulations, parameters, forecast_vintages_csv=forecast_vintages_csv)
+#output_df = simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simulations, parameters, forecast_vintages_csv=forecast_vintages_csv, safety_stock_in_days=safety_stock_in_days)
 output_df = simulate_combo("DC",
                            "Product",
                            warm_up_period,
@@ -355,6 +367,7 @@ output_df = simulate_combo("DC",
                            100,
                            historical_inventory,
                            parameters,
-                           forecast_vintages_csv=forecast_vintages_csv)
+                           forecast_vintages_csv=forecast_vintages_csv,
+                           safety_stock_in_days=safety_stock_in_days)
 
 #output_df.to_csv(output_csv, index=False)

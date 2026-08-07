@@ -50,7 +50,12 @@ def load_forecast_vintages(path, site, product, site_col="Site", product_col="Pr
         raise ValueError(f"No forecast rows found for {site_col}={site!r}, {product_col}={product!r}")
 
     forecast_df[date_col] = pd.to_datetime(forecast_df[date_col])
-    forecast_df[as_of_col] = pd.to_datetime(forecast_df[as_of_col])
+
+    # as_of_dt comes as a compact YYYYMMDD value (e.g. 20250711), not a
+    # normal date string - strip a trailing ".0" in case it was read as a
+    # float, then parse it explicitly instead of letting pd.to_datetime guess.
+    as_of_str = forecast_df[as_of_col].astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+    forecast_df[as_of_col] = pd.to_datetime(as_of_str, format="%Y%m%d")
 
     vintages = {}
     for as_of_dt, group in forecast_df.groupby(as_of_col):

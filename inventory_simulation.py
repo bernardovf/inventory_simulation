@@ -7,7 +7,7 @@ plot_historical_inventory = False
 
 from utils import load_historical_demand, load_site_product_parameters, load_forecast_vintages, forecast_windows_from_vintages, latest_forecast_by_date
 
-def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stock, MOQ=None, Review_Period=None, lead_time_std_dev=0, rng=None, forecast_lead_time_series=None, forecast_protection_period_series=None, safety_stock_in_days=False):
+def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stock, MOQ=None, Review_Period=None, lead_time_std_dev=0, rng=None, forecast_lead_time_series=None, forecast_protection_period_series=None, safety_stock_in_days=False, forecast_safety_stock_series=None):
     if rng is None:
         rng = np.random.default_rng()
 
@@ -22,6 +22,15 @@ def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stoc
     if using_real_forecast:
         forecast_lead_time_series = np.asarray(forecast_lead_time_series, dtype=float)
         forecast_protection_period_series = np.asarray(forecast_protection_period_series, dtype=float)
+
+    if forecast_safety_stock_series is not None:
+        forecast_safety_stock_series = np.asarray(forecast_safety_stock_series, dtype=float)
+    elif safety_stock_in_days and using_real_forecast:
+        raise ValueError(
+            "safety_stock_in_days requires forecast_safety_stock_series when using a real forecast "
+            "(forecast_lead_time_series is set) - the lead-time/protection-period sums don't cover "
+            "an arbitrary safety-stock-days window."
+        )
 
     # Extra space is needed for orders arriving after the simulation horizon;
     # padded generously so a long random lead time doesn't fall off the end.
@@ -69,17 +78,22 @@ def simulate_inventory(demand, forecast, lead_time, initial_on_hand, safety_stoc
 
         # Demand over the upcoming lead time / protection period, taken from the
         # forecast (not the actual future demand, which wouldn't be known yet).
+        future_forecast = forecast[t + 1:]
         if using_real_forecast:
             forecast_lead_time = forecast_lead_time_series[t]
             forecast_protection_period = forecast_protection_period_series[t]
         else:
-            future_forecast = forecast[t + 1:]
             forecast_lead_time = future_forecast[:lead_time].sum()
             forecast_protection_period = future_forecast[:lead_time + Review_Period].sum()
 
         if safety_stock_in_days:
-            avg_daily_forecast = forecast_lead_time / lead_time if lead_time > 0 else 0.0
-            safety_stock_qty = safety_stock * avg_daily_forecast
+            if forecast_safety_stock_series is not None:
+                # Sum of the forecast for the next safety_stock days, from the same
+                # vintage-selection logic as forecast_lead_time/forecast_protection_period.
+                safety_stock_qty = forecast_safety_stock_series[t]
+            else:
+                ss_days = int(round(safety_stock))
+                safety_stock_qty = future_forecast[:ss_days].sum()
         else:
             safety_stock_qty = safety_stock
 
@@ -163,9 +177,22 @@ def simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simu
             vintages = load_forecast_vintages(forecast_vintages_csv, site=site, product=product)
             forecast_lead_time_series, forecast_protection_period_series = forecast_windows_from_vintages(
                 vintages, demand_history.index, average_lead_time, review_period)
+
+            # Sum of the forecast for the next safety_stock days - a different
+            # window per safety_stock_range value, so computed once per value here
+            # rather than once per item (unlike the two series above, which only
+            # depend on lead_time/review_period).
+            if safety_stock_in_days:
+                forecast_safety_stock_series_by_ss = {
+                    ss: forecast_windows_from_vintages(vintages, demand_history.index, int(round(ss)), 0)[0]
+                    for ss in safety_stock_range
+                }
+            else:
+                forecast_safety_stock_series_by_ss = {}
         else:
             forecast_lead_time_series = None
             forecast_protection_period_series = None
+            forecast_safety_stock_series_by_ss = {}
 
         fill_rate_by_ss = {ss: 0.0 for ss in safety_stock_range}
 
@@ -189,7 +216,8 @@ def simulate_all_items(warm_up_period, review_period, safety_stock_steps, n_simu
                     rng=rng,
                     forecast_lead_time_series=forecast_lead_time_series,
                     forecast_protection_period_series=forecast_protection_period_series,
-                    safety_stock_in_days=safety_stock_in_days)
+                    safety_stock_in_days=safety_stock_in_days,
+                    forecast_safety_stock_series=forecast_safety_stock_series_by_ss.get(safety_stock_units))
 
                 results = results[results["Period"] > warm_up_period]
                 total_demand = results["Demand"].sum()
@@ -264,6 +292,13 @@ def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, s
                 actual_vs_predicted["Predicted_Demand"] = predicted_demand.reindex(actual_vs_predicted.index)
                 actual_vs_predicted.to_csv(f"actual_vs_predicted_demand_{site}_{product}.csv")
 
+            if safety_stock_in_days and forecast_vintages_csv is not None:
+                ss_days = int(round(safety_stock_units))
+                forecast_safety_stock_series, _ = forecast_windows_from_vintages(
+                    vintages, demand_history.index, ss_days, 0)
+            else:
+                forecast_safety_stock_series = None
+
             results = simulate_inventory(
                 demand=demand,
                 forecast=forecast,
@@ -276,6 +311,7 @@ def simulate_combo(site_chosen, product_chosen, warm_up_period, review_period, s
                 rng=rng,
                 forecast_lead_time_series=forecast_lead_time_series,
                 forecast_protection_period_series=forecast_protection_period_series,
+                forecast_safety_stock_series=forecast_safety_stock_series,
                 safety_stock_in_days=safety_stock_in_days)
 
             results = results[results["Period"] > warm_up_period]
